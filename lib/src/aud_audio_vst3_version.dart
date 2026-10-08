@@ -1,5 +1,5 @@
 // @license
-// Copyright (c) Audanika. All Rights Reserved.
+// Copyright (c) ggsuite
 //
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
@@ -9,4 +9,4 @@
 // coverage:ignore-file
 
 /// The version of the `aud_audio_vst3` package.
-const String audAudioVst3Version = '0.0.1';
+const String audAudioVst3Version = '0.0.2';
