@@ -1,0 +1,19 @@
+// @license
+// Copyright (c) Audanika. All Rights Reserved.
+//
+// Use of this source code is governed by terms that can be
+// found in the LICENSE file in the root of this package.
+
+{
+  "name": "aud_audio_vst3",
+  "summary": "VST3 shell of the Audanika Audio Engine over its headless host.",
+  "domain": [
+    "VST3 shell of the Audanika Audio Engine over its headless host"
+  ],
+  "interfaces": {
+    "uses": {
+      "aud_audio_graph": "package dependency"
+    },
+    "usedBy": {}
+  }
+}
