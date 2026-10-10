@@ -1,0 +1,32 @@
+name: aud_audio_vst3_editor
+description: "The Flutter editor of the aud_audio_vst3 spike (ticket 24): knobs of aud_audio_ui_controls bound over the shell protocol"
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  aud_audio_core:
+    git:
+      url: git@github.com:audaudio/aud_audio_core.git
+      tag_pattern: "{{version}}"
+    version: ^0.4.0
+  aud_audio_ui_controls:
+    git:
+      url: git@github.com:audaudio/aud_audio_ui_controls.git
+      tag_pattern: "{{version}}"
+    version: ^0.1.0
+  aud_audio_vst3:
+    path: ../
+  ffi: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: false
