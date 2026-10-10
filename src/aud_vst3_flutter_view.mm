@@ -420,12 +420,23 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
     }
     if (controller_ != nil) {
       [((NSViewController*)controller_).view removeFromSuperview];
-      controller_ = nil;
     }
     if (engine_ != nil) {
-      [engine_ shutDownEngine];
-      engine_ = nil;
+      // Flutter's ResizeSynchronizer runs a present it scheduled for a
+      // later vsync even after the view is gone, and the present reaches
+      // the engine's compositor: releasing the controller and shutting the
+      // engine down at once crashed REAPER. Both live on until such
+      // presents have run, the controller released first, as before.
+      id<AudFlutterEngine> engine = engine_;
+      __block id controller = controller_;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), ^{
+                       controller = nil;
+                       [engine shutDownEngine];
+                     });
     }
+    controller_ = nil;
+    engine_ = nil;
     if (view_ != nil) {
       clearDelegate(view_);
       [view_ removeFromSuperview];

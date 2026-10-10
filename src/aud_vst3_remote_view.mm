@@ -351,8 +351,9 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     return kResultTrue;
   }
 
-  // The geometry of the view for the editor.
-  aud::Json place() const {
+  // The geometry of the view for the editor; remembers the visibility it
+  // reports.
+  aud::Json place() {
     aud::Json json = message("place");
     NSWindow* window = view_.window;
     NSRect onScreen = NSZeroRect;
@@ -375,6 +376,17 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     json.set("scale", number(scale));
     json.set("window", number(static_cast<double>(windowNumber)));
     json.set("visible", aud::Json::ofBool(visible));
+    sentVisible_ = visible;
+    plugin_->probe().write(
+        "place",
+        std::string("\"visible\":") + (visible ? "true" : "false") +
+            ",\"windowVisible\":" + (window != nil && window.isVisible ? "true" : "false") +
+            ",\"occlusion\":" +
+            std::to_string(window != nil ? static_cast<unsigned long>(window.occlusionState)
+                                         : 0) +
+            ",\"window\":" + std::to_string(windowNumber) +
+            ",\"x\":" + std::to_string(static_cast<int>(onScreen.origin.x)) +
+            ",\"y\":" + std::to_string(static_cast<int>(onScreen.origin.y)));
     return json;
   }
 
@@ -391,6 +403,15 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
   }
 
   Plugin* plugin() const { return plugin_; }
+
+  // Sends the place again when the view became visible or hidden without a
+  // window notification: the first place can report the view hidden (a
+  // host orders its window in after attaching the view), and not every
+  // later change reaches the view as a notification. The host's meter
+  // timer asks.
+  void checkVisible() {
+    if (view_ != nil && visible() != sentVisible_) sendPlace();
+  }
 
   // Shows a frame of the editor (A and S).
   void showFrame(const SurfaceFrame& frame) {
@@ -673,6 +694,7 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
   uint32_t shownGeneration_ = 0;
   int64_t attachStamp_ = 0;
   bool firstFrame_ = false;
+  bool sentVisible_ = false;
   SyntheticDrag drag_;
 };
 
@@ -779,12 +801,14 @@ void EditorHost::stopMeters() {
 
 // The meters of every visible view, back to back, and only those that
 // changed: a shared editor draws them in one frame, and a hidden or quiet
-// view costs nothing.
+// view costs nothing. Each view also reports a change of its visibility.
 void EditorHost::sendMeters() {
   if (!ready_) return;
   for (const auto& entry : clients_) {
     RemoteView* view = entry.second.view;
-    if (view == nullptr || !view->visible()) continue;
+    if (view == nullptr) continue;
+    view->checkVisible();
+    if (!view->visible()) continue;
     Engine* engine = entry.second.plugin->engine();
     if (engine == nullptr) continue;
     const EngineMeter meter = engine->meter();

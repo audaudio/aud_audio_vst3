@@ -72,7 +72,7 @@ final class AudEditorViews {
       if var view = views[instance] {
         view.shown = visible
         views[instance] = view
-        update(view)
+        update(view, instance: instance)
         if follow && !visible { view.window.orderOut(nil) }
       }
       result(nil)
@@ -119,6 +119,9 @@ final class AudEditorViews {
       bridge = AudEditorBridge(
         serviceName: service, contentView: contentView, instance: UInt32(instance))
       bridge?.paused = true
+      if bridge == nil {
+        NSLog("aud_editor: view %d has no Mach channel to the plugin (%@)", instance, service)
+      }
     }
     // A surface window renders transparent from the start; a follow window
     // shows once the first place has put it over the plugin's view.
@@ -127,8 +130,15 @@ final class AudEditorViews {
     return Int(controller.viewIdentifier)
   }
 
-  private func update(_ view: View) {
-    view.bridge?.paused = !(view.shown && view.onScreen)
+  private func update(_ view: View, instance: Int) {
+    let paused = !(view.shown && view.onScreen)
+    guard let bridge = view.bridge, bridge.paused != paused else { return }
+    bridge.paused = paused
+    // The editor log tells why a view renders or not.
+    NSLog(
+      "aud_editor: view %d %@ (shown %@, on screen %@, own window %@)", instance,
+      paused ? "pauses" : "renders", view.shown ? "yes" : "no", view.onScreen ? "yes" : "no",
+      view.window.occlusionState.contains(.visible) ? "visible" : "occluded")
   }
 
   private func place(instance: Int, args: [String: Any]) {
@@ -142,7 +152,7 @@ final class AudEditorViews {
     let visible = args["visible"] as? Bool ?? true
     view.onScreen = visible
     views[instance] = view
-    update(view)
+    update(view, instance: instance)
     guard follow else { return }
     if visible, let host = args["window"] as? Int, host > 0 {
       window.order(.above, relativeTo: host)

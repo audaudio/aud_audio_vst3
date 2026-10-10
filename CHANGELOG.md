@@ -22,6 +22,17 @@
 
 - Depend on aud_audio_core and aud_audio_graph 0.4.0; drop the template's FFI sample
 
+
+### Fixed
+
+- Fix paused editors and B's teardown crash in REAPER
+
+- Check every view's visibility from the editor host's meter timer
+
+- Keep B's view controller and engine for 200 ms after the view closes
+
+- Log each view's place and the editor's pauses, layers and frames
+
 ## 0.0.2 - 2026-10-08
 
 ### Added

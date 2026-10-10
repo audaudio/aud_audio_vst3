@@ -243,6 +243,7 @@ static void* const kContentsContext = (void*)&kContentsContext;
     [_observed removeObserver:self forKeyPath:@"contents" context:kContentsContext];
   }
   _observed = found;
+  NSLog(@"aud_editor: view %u observes the surface layer of its FlutterView", _instance);
   [_observed addObserver:self
               forKeyPath:@"contents"
                  options:NSKeyValueObservingOptionInitial
@@ -344,6 +345,7 @@ static void* const kContentsContext = (void*)&kContentsContext;
   IOSurfaceIncrementUseCount(source);
   const uint64_t frame = ++_frame;
   _framesSent += 1;
+  if (_framesSent == 1) NSLog(@"aud_editor: view %u sends its first frame", _instance);
   const mach_port_t pluginPort = _channel.pluginPort;
   const uint32_t instance = _instance;
   __weak AudEditorBridge* weakSelf = self;
@@ -377,8 +379,10 @@ static void* const kContentsContext = (void*)&kContentsContext;
     message.captured = AudNowNs();
     // A frame the plugin never receives is never released: its surface
     // goes back into the pool here.
-    if (mach_msg(&message.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof(message),
-                 0, MACH_PORT_NULL, 100, MACH_PORT_NULL) != KERN_SUCCESS) {
+    const kern_return_t sent = mach_msg(&message.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                                        sizeof(message), 0, MACH_PORT_NULL, 100, MACH_PORT_NULL);
+    if (sent != KERN_SUCCESS) {
+      NSLog(@"aud_editor: view %u could not send frame %llu (0x%x)", instance, frame, sent);
       [weakSelf releaseIndex:(uint32_t)index generation:generation];
     }
   });
