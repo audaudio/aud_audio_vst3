@@ -34,23 +34,23 @@ packages:
     source: hosted
     version: "2.13.1"
   aud_audio_core:
-    dependency: transitive
+    dependency: "direct main"
     description:
       path: "."
-      resolved-ref: ec7d026c21d587284e911d499d380f0a77a89634
+      resolved-ref: d9559d094faa63ffae9f292139a214974e33df18
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_core.git"
     source: git
-    version: "0.0.2"
+    version: "0.4.0"
   aud_audio_graph:
     dependency: "direct main"
     description:
       path: "."
-      resolved-ref: "6b1c45d4f1601424b08c91b79f7e47d853cac1f1"
+      resolved-ref: "96a779f8373327d5a0ad396e4124bbda8aa7eb8d"
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_graph.git"
     source: git
-    version: "0.0.2"
+    version: "0.4.0"
   aud_midi_standard:
     dependency: transitive
     description:
@@ -76,16 +76,8 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.0"
-  cli_util:
-    dependency: transitive
-    description:
-      name: cli_util
-      sha256: "89b8801ba49f8b593fbf2d3e59efd0f566c46cd4ba6837ae2610c72b52a0f899"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.6.0"
   code_assets:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: code_assets
       sha256: "828110d598123b5ea96c00c9f3c72105bf79f8ee36c20a39b26209ade421ec57"
@@ -132,14 +124,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.7"
-  dart_style:
-    dependency: transitive
-    description:
-      name: dart_style
-      sha256: "82ade9fc4273f29ed673e33166944465225b4f7fc5d4aaef48605cc751c18fc1"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.1.13"
   dna_audanika:
     dependency: "direct dev"
     description:
@@ -213,21 +197,13 @@ packages:
     source: hosted
     version: "0.2.4"
   ffi:
-    dependency: "direct dev"
+    dependency: transitive
     description:
       name: ffi
       sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
-  ffigen:
-    dependency: "direct dev"
-    description:
-      name: ffigen
-      sha256: "6f55d99ac1857fc063b58c3b31753df2bba417028ba98d30c6d625a385855064"
-      url: "https://pub.dev"
-    source: hosted
-    version: "23.0.0"
   file:
     dependency: transitive
     description:
@@ -325,7 +301,7 @@ packages:
     source: hosted
     version: "1.11.0"
   hooks:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: hooks
       sha256: eaac480a35ec0814146c2c48d96aaa829e0e44a7662c88ae84c9edf4bc35651f
@@ -365,7 +341,7 @@ packages:
     source: hosted
     version: "6.1.0"
   logging:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: logging
       sha256: c8245ada5f1717ed44271ed1c26b8ce85ca3228fd2ffdb75468ab01979309d61
@@ -405,7 +381,7 @@ packages:
     source: hosted
     version: "1.0.5"
   native_toolchain_c:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: native_toolchain_c
       sha256: "90eaad8059ebc2004a63810a4696ea9acdb02473e47ed3b6b3bafb100ac77e31"
@@ -468,14 +444,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
-  quiver:
-    dependency: transitive
-    description:
-      name: quiver
-      sha256: ea0b925899e64ecdfbf9c7becb60d5b50e706ade44a85b2363be2a22d88117d2
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.2.2"
   recase:
     dependency: transitive
     description:
@@ -668,13 +636,5 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.4"
-  yaml_edit:
-    dependency: transitive
-    description:
-      name: yaml_edit
-      sha256: "07c9e63ba42519745182b88ca12264a7ba2484d8239958778dfe4d44fe760488"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.2.4"
 sdks:
   dart: ">=3.13.0 <4.0.0"
