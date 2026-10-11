@@ -1,6 +1,12 @@
+# The strict lints of the code guide (doc/guides/code-guide-dart.md, "Keep
+# the lints strict").
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
   exclude:
     - build/**
     - android/**
@@ -9,6 +15,19 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+
+linter:
+  rules:
+    - always_declare_return_types
+    - lines_longer_than_80_chars
+    - prefer_const_constructors
+    - prefer_const_constructors_in_immutables
+    - prefer_const_declarations
+    - prefer_const_literals_to_create_immutables
+    - prefer_single_quotes
+    - public_member_api_docs
+    - require_trailing_commas
+    - unawaited_futures
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

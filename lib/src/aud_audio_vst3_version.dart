@@ -9,4 +9,4 @@
 // coverage:ignore-file
 
 /// The version of the `aud_audio_vst3` package.
-const String audAudioVst3Version = '0.0.2';
+const String audAudioVst3Version = '0.1.0';

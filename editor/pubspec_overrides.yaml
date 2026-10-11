@@ -1,0 +1,5 @@
+# The editor runs against the sibling checkouts of the ticket, so that it
+# sees the unreleased versions of the family (ticket 24).
+dependency_overrides:
+  aud_audio_ui_controls:
+    path: ../../aud_audio_ui_controls

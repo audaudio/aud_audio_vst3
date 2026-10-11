@@ -8,11 +8,15 @@
   "name": "aud_audio_vst3",
   "summary": "VST3 shell of the Audanika Audio Engine over its headless host.",
   "domain": [
-    "VST3 shell of the Audanika Audio Engine over its headless host"
+    "VST3 shell over the headless host (S18); spike S0-plugin-ui: plugin, editor variants A S F B C D, symbol hygiene",
+    "Flutter editor out of process: Unix-socket shell protocol in Dart, shared IOSurfaces, forwarded input (plugin-003)",
+    "Vendored VST3 SDK 3.8.1 subset; Node build, validator, test host, REAPER and probe scripts"
   ],
   "interfaces": {
     "uses": {
-      "aud_audio_graph": "package dependency"
+      "aud_audio_graph": "package dependency; the headless host in C",
+      "aud_audio_core": "package dependency; AudCommand, the SPSC ring",
+      "aud_audio_ui_controls": "the editor app's knobs and parameter binding"
     },
     "usedBy": {}
   }
