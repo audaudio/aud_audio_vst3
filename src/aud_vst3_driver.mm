@@ -17,8 +17,13 @@ constexpr int kSettleSteps = 30;
 
 }  // namespace
 
+// #############################################################################
+// SyntheticDrag
+
+// .............................................................................
 SyntheticDrag::~SyntheticDrag() { stop(); }
 
+// .............................................................................
 void SyntheticDrag::start(NSView* view, ViewDelegate* delegate,
                           const std::function<void()>& prepare,
                           std::function<void()> done) {
@@ -39,6 +44,7 @@ void SyntheticDrag::start(NSView* view, ViewDelegate* delegate,
   [[NSRunLoop mainRunLoop] addTimer:timer_ forMode:NSRunLoopCommonModes];
 }
 
+// .............................................................................
 void SyntheticDrag::stop() {
   [timer_ invalidate];
   timer_ = nil;

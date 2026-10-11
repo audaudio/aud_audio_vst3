@@ -32,39 +32,71 @@
 
 namespace aud_vst3 {
 
+// #############################################################################
+// A frame of the editor to show.
 struct SurfaceFrame {
-  IOSurfaceRef surface = nullptr;  // retained for the handler
+  // ...........................................................................
+  // The surface that holds the frame, retained for the handler.
+  IOSurfaceRef surface = nullptr;
+
+  // ...........................................................................
+  // The plugin instance, the surface's index in the pool and the pool's
+  // generation.
   uint32_t instance = 0;
   uint32_t index = 0;
   uint32_t generation = 0;
+
+  // ...........................................................................
+  // The number of the frame, and when the editor copied it (mach time in
+  // nanoseconds).
   uint64_t frame = 0;
-  int64_t captured = 0;  // mach time ns
+  int64_t captured = 0;
+
+  // ...........................................................................
+  // The pixels per point of the pool.
   double scale = 1;
 };
 
+// #############################################################################
+// The plugin's end of the surface channel; see above.
 class SurfaceChannel {
  public:
+  // ...........................................................................
   // [UI thread] A frame to show; the handler releases frame.surface.
   using FrameHandler = std::function<void(const SurfaceFrame& frame)>;
 
+  // ...........................................................................
+  // Creates the channel; start() registers the port. `onFrame` runs on the
+  // host's UI thread.
   explicit SurfaceChannel(FrameHandler onFrame);
+
+  // ...........................................................................
+  // Destroys the receive right and drops the editor's port and every
+  // surface.
   ~SurfaceChannel();
 
+  // ...........................................................................
+  // Not copyable: the receive source works on this object.
   SurfaceChannel(const SurfaceChannel&) = delete;
   SurfaceChannel& operator=(const SurfaceChannel&) = delete;
 
+  // ...........................................................................
   // Registers the port under a new name; false when bootstrap refuses it.
   bool start();
 
+  // ...........................................................................
   // The name the editor looks up.
   const std::string& name() const { return name_; }
 
+  // ...........................................................................
   // [any thread] Hands surface `index` of `instance` back to the editor.
   void release(uint32_t instance, uint32_t index, uint32_t generation);
 
+  // ...........................................................................
   // Drops the surfaces of `instance`.
   void drop(uint32_t instance);
 
+  // ...........................................................................
   // Drops the editor's port and every surface, for a new editor process.
   void reset();
 

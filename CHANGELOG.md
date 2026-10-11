@@ -33,6 +33,22 @@
 
 - Log each view's place and the editor's pauses, layers and frames
 
+- Fix the review findings of the plugin, editor and scripts
+
+- Validate every Mach message of the editor before using its rights
+
+- Check the writes of getState, send only to the authenticated editor and range-check the numbers of the socket
+
+- Add native unit tests for the parameter mapping, the socket framing and the skew (scripts/test-native.js)
+
+- Share the helpers of the editor views; doc comments, landmarks, include groups and named constants in the native code
+
+- Let variant B use AudShellParamSink, test every editor file and make the lints strict
+
+- Guard --dest of vendor-vst3sdk.js, check the number options of the REAPER scripts and escape the JSON of the ReaScript
+
+- Document the Dart API, the scripts and the editor; translate the German README
+
 ## 0.0.2 - 2026-10-08
 
 ### Added

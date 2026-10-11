@@ -22,36 +22,73 @@
 #ifdef __OBJC__
 #import <Cocoa/Cocoa.h>
 
+#include <cstdint>
+
 namespace aud_vst3 {
 
+// #############################################################################
 // What the view class forwards. Called on the host's UI thread.
 class ViewDelegate {
  public:
+  // ...........................................................................
+  // Destroys the delegate; clearDelegate() detaches it from its view first.
   virtual ~ViewDelegate() = default;
+
+  // ...........................................................................
+  // Draws the part `dirty` of `view`.
   virtual void drawRect(NSView* view, NSRect dirty) {}
+
+  // ...........................................................................
+  // Takes a mouse button, a drag or a move in `view`, or the mouse entering
+  // or leaving it.
   virtual void mouseEvent(NSView* view, NSEvent* event) {}
+
+  // ...........................................................................
+  // Takes a scroll of the wheel or the trackpad over `view`.
   virtual void scrollEvent(NSView* view, NSEvent* event) {}
+
+  // ...........................................................................
+  // Takes a key or a change of the modifiers in `view`; the event goes on
+  // along the responder chain afterwards.
   virtual void keyEvent(NSView* view, NSEvent* event) {}
+
+  // ...........................................................................
+  // Learns that `view` took (true) or lost the keyboard focus.
   virtual void focusChanged(NSView* view, bool focused) {}
+
+  // ...........................................................................
+  // Learns that `view` moved into another window or out of its window.
   virtual void windowChanged(NSView* view) {}
+
+  // ...........................................................................
+  // Sets the cursor over `view`.
   virtual void cursorUpdate(NSView* view, NSEvent* event) {}
 };
 
+// #############################################################################
 // The view class of this image; created once.
 Class viewClass();
 
+// #############################################################################
 // The name of the view class of this image.
 const char* viewClassName();
 
+// #############################################################################
 // Creates a view of the class for `delegate`.
 NSView* makeView(ViewDelegate* delegate, NSRect frame);
 
+// #############################################################################
 // Detaches the delegate before the C++ object goes.
 void clearDelegate(NSView* view);
 
+// #############################################################################
 // The flavor of the image whose code implements the class methods: the
 // class of another image answers with that image's flavor.
 int implementationFlavor(NSView* view);
+
+// #############################################################################
+// The time of `event` in nanoseconds, on the clock of the probe's stamps.
+int64_t stampOf(NSEvent* event);
 
 }  // namespace aud_vst3
 

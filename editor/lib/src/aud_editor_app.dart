@@ -14,7 +14,7 @@ import 'aud_editor_layout.dart';
 // #############################################################################
 /// The spec of a parameter of the plugin, for its control.
 AudParamSpec audSpecOf(AudShellParam param) => AudParamSpec(
-  address: AudParamAddress(param.nodeId, param.paramId),
+  address: AudParamAddress(nodeId: param.nodeId, paramId: param.paramId),
   min: param.min,
   max: param.max,
   defaultValue: param.defaultValue,

@@ -10,6 +10,27 @@ import 'package:aud_audio_core/aud_audio_core.dart';
 import 'package:aud_audio_ui_controls/aud_audio_ui_controls.dart';
 import 'package:aud_audio_vst3/aud_audio_vst3.dart';
 
+import 'aud_mach_clock.dart';
+
+// #############################################################################
+/// An [AudShellParamSink.onApplied] for the latency probe: sends the record
+/// `paramApplied` over [send] for every numbered change of the plugin, with
+/// the change's sequence and id and the mach time at which the control took
+/// the value.
+void Function(AudShellParamValue value) audProbeApplied({
+  required void Function(AudShellMessage message) send,
+  int instance = 0,
+}) => (value) {
+  if (value.sequence == 0) return;
+  send(
+    AudShellProbe('paramApplied', {
+      'seq': value.sequence,
+      'id': value.id,
+      't': AudMachClock.nowNs(),
+    }, instance: instance),
+  );
+};
+
 // #############################################################################
 /// The parameter sink of the editor: edits go to the plugin as
 /// [AudSetParamCommand]s over the shell protocol, gestures as
@@ -29,7 +50,8 @@ class AudShellParamSink implements AudParamSink {
     this.instance = 0,
     this.onApplied,
   }) : _byAddress = {
-         for (final p in params) AudParamAddress(p.nodeId, p.paramId): p,
+         for (final p in params)
+           AudParamAddress(nodeId: p.nodeId, paramId: p.paramId): p,
        },
        _byId = {for (final p in params) p.id: p};
 
@@ -87,7 +109,10 @@ class AudShellParamSink implements AudParamSink {
     final param = _byId[value.id];
     if (param == null) return;
     _changes.add(
-      AudParamChange(AudParamAddress(param.nodeId, param.paramId), value.value),
+      AudParamChange(
+        address: AudParamAddress(nodeId: param.nodeId, paramId: param.paramId),
+        value: value.value,
+      ),
     );
     onApplied?.call(value);
   }

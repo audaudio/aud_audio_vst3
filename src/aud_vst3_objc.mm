@@ -161,30 +161,40 @@ Class createClass() {
 
 }  // namespace
 
+// #############################################################################
 Class viewClass() {
   static Class cls = createClass();
   return cls;
 }
 
+// #############################################################################
 const char* viewClassName() {
   viewClass();
   return className().c_str();
 }
 
+// #############################################################################
 NSView* makeView(ViewDelegate* delegate, NSRect frame) {
   NSView* view = [[viewClass() alloc] initWithFrame:frame];
   setDelegateOf(view, delegate);
   return view;
 }
 
+// #############################################################################
 void clearDelegate(NSView* view) {
   if (view != nil) setDelegateOf(view, nullptr);
 }
 
+// #############################################################################
 int implementationFlavor(NSView* view) {
   if (![view respondsToSelector:@selector(audFlavor)]) return 0;
   return reinterpret_cast<int (*)(id, SEL)>(objc_msgSend)(view,
                                                          @selector(audFlavor));
+}
+
+// #############################################################################
+int64_t stampOf(NSEvent* event) {
+  return static_cast<int64_t>(event.timestamp * 1e9);
 }
 
 }  // namespace aud_vst3

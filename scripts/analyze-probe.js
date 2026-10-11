@@ -78,12 +78,7 @@ function analyze(records, window) {
   const rendered = records.filter((r) => r.kind === 'rendered');
 
   // The process records by key, in time order.
-  const processByKey = new Map();
-  for (const record of processes) {
-    const key = keyOf(record);
-    if (!processByKey.has(key)) processByKey.set(key, []);
-    processByKey.get(key).push(record);
-  }
+  const processByKey = Map.groupBy(processes, keyOf);
   const total = [];
   const editorShare = [];
   const hostShare = [];
@@ -127,24 +122,26 @@ function analyze(records, window) {
       .map((r) => [`${instanceOf(r)}/${r.seq}`, r]),
   );
   const presented = records.filter((r) => r.kind === 'presented');
+  // Indexed once, in time order: the lookups below search one key only.
+  const drawnByKey = Map.groupBy(drawn, keyOf);
+  const sentByKey = Map.groupBy(sent, keyOf);
+  const presentedByInstance = Map.groupBy(presented, instanceOf);
+  const firstFrom = (candidates, t) => candidates?.find((record) => record.t >= t);
   const audioToUi = [];
   for (const param of hostParams) {
+    const key = keyOf(param);
     if (sent.length === 0) {
-      const match = drawn.find(
-        (record) => record.t >= param.t && keyOf(record) === keyOf(param),
-      );
+      const match = firstFrom(drawnByKey.get(key), param.t);
       if (match) audioToUi.push(match.t - param.t);
       continue;
     }
-    const out = sent.find(
-      (record) => record.t >= param.t && keyOf(record) === keyOf(param),
-    );
+    const out = firstFrom(sentByKey.get(key), param.t);
     if (!out) continue;
     const taken = appliedInEditor.get(`${instanceOf(out)}/${out.seq}`);
     if (!taken) continue;
-    const frame = presented.find(
-      (record) => instanceOf(record) === instanceOf(out) && record.captured >= taken.t,
-    );
+    const frame = presentedByInstance
+      .get(instanceOf(out))
+      ?.find((record) => record.captured >= taken.t);
     if (frame) audioToUi.push(frame.t - param.t);
   }
 
@@ -183,13 +180,21 @@ function analyze(records, window) {
   };
 }
 
+// The number an option names; anything else throws, so that a typo cannot
+// turn a limit into NaN.
+function numberArg(name, value) {
+  const number = typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  if (!Number.isFinite(number)) throw new Error(`${name} takes a number, not ${value}`);
+  return number;
+}
+
 function main() {
   const args = process.argv.slice(2);
   const window = { from: -Infinity, to: Infinity };
   let file = null;
   for (let i = 0; i < args.length; ++i) {
-    if (args[i] === '--from') window.from = Number(args[++i]);
-    else if (args[i] === '--to') window.to = Number(args[++i]);
+    if (args[i] === '--from') window.from = numberArg(args[i], args[++i]);
+    else if (args[i] === '--to') window.to = numberArg(args[i], args[++i]);
     else file = args[i];
   }
   file ??= newestProbe();

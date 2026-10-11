@@ -30,7 +30,8 @@ abstract final class AudShellCodec {
 
   // ...........................................................................
   /// Splits a byte stream into messages; bytes may arrive in any chunks.
-  /// A frame above [maxFrame] or text that is no message ends the stream
+  /// A frame above [maxFrame] or text that is no message - no JSON, no
+  /// object, an unknown type, a missing or mistyped field - ends the stream
   /// with a [FormatException].
   static StreamTransformer<Uint8List, AudShellMessage> decoder() =>
       StreamTransformer<Uint8List, AudShellMessage>.fromBind(_decode);
@@ -58,11 +59,27 @@ abstract final class AudShellCodec {
           Uint8List.sublistView(pending, offset + 4, offset + 4 + length),
         );
         offset += 4 + length;
-        yield AudShellMessage.fromJson(
-          jsonDecode(body) as Map<String, Object?>,
-        );
+        yield _messageOf(body);
       }
       pending = Uint8List.sublistView(pending, offset);
+    }
+  }
+
+  // The message [body] holds. JSON that is no object, an unknown type and a
+  // missing or mistyped field throw a FormatException with [body] as its
+  // source.
+  static AudShellMessage _messageOf(String body) {
+    final json = jsonDecode(body);
+    if (json is! Map<String, Object?>) {
+      throw FormatException('No shell message', body);
+    }
+    try {
+      return AudShellMessage.fromJson(json);
+    } on FormatException {
+      rethrow;
+    } on Object {
+      // The casts of a missing or mistyped field throw errors.
+      throw FormatException('Malformed shell message', body);
     }
   }
 }

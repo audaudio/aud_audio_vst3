@@ -23,23 +23,32 @@
 
 #include <string>
 
+#include "aud_audio_graph.h"
+#include "aud_json.hpp"
+#include "public.sdk/source/common/pluginview.h"
+
 #include "aud_vst3_driver.hpp"
 #include "aud_vst3_layout.hpp"
 #include "aud_vst3_objc.hpp"
 #include "aud_vst3_plugin.hpp"
-#include "public.sdk/source/common/pluginview.h"
+#include "aud_vst3_probe.hpp"
+#include "aud_vst3_shell.hpp"
 
 #ifndef AUD_VST3_FLUTTER_PREFIX
 #define AUD_VST3_FLUTTER_PREFIX "Flutter"
 #endif
 
-// The parts of the Flutter API the plugin calls; the classes have renamed
-// names, so they are reached through the runtime.
+// #############################################################################
+// What the plugin calls of FlutterDartProject. The classes of the Flutter
+// API have renamed names, so the plugin reaches them through the runtime,
+// with these protocols.
 @protocol AudFlutterProject
 - (instancetype)initWithPrecompiledDartBundle:(NSBundle*)bundle;
 - (void)setDartEntrypointArguments:(NSArray<NSString*>*)arguments;
 @end
 
+// #############################################################################
+// What the plugin calls of FlutterEngine.
 @protocol AudFlutterEngine
 - (instancetype)initWithName:(NSString*)name
                      project:(id)project
@@ -49,15 +58,21 @@
 - (void)shutDownEngine;
 @end
 
+// #############################################################################
+// What the plugin calls of FlutterViewController.
 @protocol AudFlutterViewController
 - (instancetype)initWithEngine:(id)engine nibName:(NSString*)nibName bundle:(NSBundle*)bundle;
 @end
 
+// #############################################################################
+// What the plugin reads of FlutterMethodCall.
 @protocol AudFlutterMethodCall
 - (NSString*)method;
 - (id)arguments;
 @end
 
+// #############################################################################
+// What the plugin calls of FlutterMethodChannel.
 @protocol AudFlutterMethodChannel
 + (instancetype)methodChannelWithName:(NSString*)name binaryMessenger:(id)messenger;
 - (void)setMethodCallHandler:(void (^)(id<AudFlutterMethodCall> call,
@@ -71,16 +86,9 @@ using namespace Steinberg;
 
 namespace {
 
-std::string bundlePath() {
-  Dl_info info{};
-  if (dladdr(reinterpret_cast<const void*>(&bundlePath), &info) == 0 ||
-      info.dli_fname == nullptr) {
-    return {};
-  }
-  std::string path = info.dli_fname;
-  for (int i = 0; i < 3; ++i) path = path.substr(0, path.rfind('/'));
-  return path;
-}
+// How long the controller and the engine of a closed editor live on:
+// Flutter may still run a present it scheduled for a later vsync.
+constexpr int64_t kEngineShutdownDelayNs = 200 * NSEC_PER_MSEC;
 
 Class flutterClass(const char* suffix) {
   return objc_getClass((std::string(AUD_VST3_FLUTTER_PREFIX) + suffix).c_str());
@@ -106,10 +114,50 @@ bool loadFlutter(Probe& probe) {
 
 NSNumber* boxed(double value) { return @(value); }
 
+// `text` as a string; an empty one for bytes that are no UTF-8.
+NSString* stringOf(const std::string& text) {
+  return [NSString stringWithUTF8String:text.c_str()] ?: @"";
+}
+
+// `json` as the objects of the method channel's codec. Integers become
+// integer numbers, as in the JSON text the socket of A, S and F carries.
+id foundationOf(const aud::Json& json) {
+  switch (json.kind) {
+    case aud::Json::Kind::null:
+      return [NSNull null];
+    case aud::Json::Kind::boolean:
+      return json.boolean ? @YES : @NO;
+    case aud::Json::Kind::number:
+      return json.isInteger() ? @(json.integer()) : @(json.number);
+    case aud::Json::Kind::string:
+      return stringOf(json.string);
+    case aud::Json::Kind::array: {
+      NSMutableArray* array = [NSMutableArray array];
+      for (const aud::Json& item : json.array) {
+        [array addObject:foundationOf(item)];
+      }
+      return array;
+    }
+    case aud::Json::Kind::object: {
+      NSMutableDictionary* object = [NSMutableDictionary dictionary];
+      for (const auto& member : json.object) {
+        object[stringOf(member.first)] = foundationOf(member.second);
+      }
+      return object;
+    }
+  }
+  return [NSNull null];
+}
+
 }  // namespace
 
+// #############################################################################
+// The plugin's view of variant B: the view of a Flutter engine of its own
+// inside the plugin's view.
 class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamObserver {
  public:
+  // ...........................................................................
+  // Creates the view of `plugin`, which it holds and observes.
   explicit FlutterEditorView(Plugin* plugin) : CPluginView(nullptr), plugin_(plugin) {
     ViewRect size(0, 0, static_cast<int32>(kEditorWidth),
                   static_cast<int32>(kEditorHeight));
@@ -120,11 +168,16 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
     plugin_->addObserver(this);
   }
 
+  // ...........................................................................
+  // Tears the view down and lets the plugin go.
   ~FlutterEditorView() override {
     plugin_->removeObserver(this);
     teardown();
     plugin_->release();
   }
+
+  // ###########################################################################
+  // IPlugView
 
   tresult PLUGIN_API isPlatformTypeSupported(FIDString type) SMTG_OVERRIDE {
     return std::strcmp(type, kPlatformTypeNSView) == 0 ? kResultTrue
@@ -154,11 +207,9 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
                         project:project
          allowHeadlessExecution:NO];
     [engine_ runWithEntrypoint:nil];
-    controller_ = [(id<AudFlutterViewController>)[flutterClass("ViewController") alloc]
-        initWithEngine:engine_
-               nibName:nil
-                bundle:nil];
-    NSView* flutterView = ((NSViewController*)controller_).view;
+    controller_ = [(NSViewController<AudFlutterViewController>*)[flutterClass(
+        "ViewController") alloc] initWithEngine:engine_ nibName:nil bundle:nil];
+    NSView* flutterView = controller_.view;
     flutterView.frame = view_.bounds;
     flutterView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [view_ addSubview:flutterView];
@@ -171,7 +222,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
       self->handle(call.method, call.arguments);
       result(nil);
     }];
-    meterTimer_ = [NSTimer timerWithTimeInterval:1.0 / 30
+    meterTimer_ = [NSTimer timerWithTimeInterval:kMeterPeriod
                                          repeats:YES
                                            block:^(NSTimer*) {
                                              self->sendMeter();
@@ -214,20 +265,21 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
     return kResultTrue;
   }
 
+  // ###########################################################################
   // ViewDelegate: only the synthetic drag arrives here; real input goes to
   // the Flutter view, which lies on top.
+
   void mouseEvent(NSView*, NSEvent* event) override {
-    NSResponder* target = (NSResponder*)controller_;
-    if (target == nil) return;
+    if (controller_ == nil) return;
     switch (event.type) {
       case NSEventTypeLeftMouseDown:
-        [target mouseDown:event];
+        [controller_ mouseDown:event];
         break;
       case NSEventTypeLeftMouseDragged:
-        [target mouseDragged:event];
+        [controller_ mouseDragged:event];
         break;
       case NSEventTypeLeftMouseUp:
-        [target mouseUp:event];
+        [controller_ mouseUp:event];
         break;
       default:
         break;
@@ -241,6 +293,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
     }
   }
 
+  // ###########################################################################
   // ParamObserver
 
   void paramChanged(uint32_t id, double normalized) override {
@@ -261,13 +314,8 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
 
   void testRequested() override {
     if (view_ == nil || drag_.running() || !ready_) return;
-    uint32_t id = 0;
-    for (const EngineParam& param : plugin_->params()) {
-      if (param.nodeId == kKnobs[kTestKnob].nodeId &&
-          param.paramId == kKnobs[kTestKnob].paramId) {
-        id = param.id;
-      }
-    }
+    const uint32_t id =
+        aud_host_param_id(kKnobs[kTestKnob].nodeId, kKnobs[kTestKnob].paramId);
     plugin_->probe().write("testStart", "\"variant\":\"B\",\"id\":" + std::to_string(id));
     FlutterEditorView* self = this;
     drag_.start(
@@ -279,6 +327,9 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
         },
         [self] { self->plugin_->probe().write("testEnd", "\"variant\":\"B\""); });
   }
+
+  // ###########################################################################
+  // FUnknown
 
   OBJ_METHODS(FlutterEditorView, CPluginView)
   REFCOUNT_METHODS(CPluginView)
@@ -294,10 +345,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
     if ([method isEqualToString:@"command"] || [method isEqualToString:@"gesture"]) {
       const int32_t node = [args[@"node"] intValue];
       const uint32_t index = [args[@"paramIndex"] unsignedIntValue];
-      const EngineParam* param = nullptr;
-      for (const EngineParam& p : plugin_->params()) {
-        if (p.node == node && p.index == index) param = &p;
-      }
+      const EngineParam* param = plugin_->param(node, index);
       if (param == nullptr) return;
       if ([method isEqualToString:@"gesture"]) {
         if ([args[@"phase"] isEqualToString:@"begin"]) plugin_->editBegin(param->id, this);
@@ -315,6 +363,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
       NSString* kind = args[@"kind"];
       NSDictionary* fields = args[@"fields"];
       if (![kind isKindOfClass:[NSString class]] ||
+          kind.UTF8String == nullptr || !isProbeKind(kind.UTF8String) ||
           ![fields isKindOfClass:[NSDictionary class]] ||
           ![NSJSONSerialization isValidJSONObject:fields]) {
         return;
@@ -327,26 +376,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
   }
 
   void sendWelcome() {
-    NSMutableArray* params = [NSMutableArray array];
-    for (const EngineParam& p : plugin_->params()) {
-      const ParamMapping* m = plugin_->mapping(p.id);
-      if (m == nullptr) continue;
-      [params addObject:@{
-        @"id" : @(p.id),
-        @"nodeId" : [NSString stringWithUTF8String:p.nodeId.c_str()],
-        @"paramId" : [NSString stringWithUTF8String:p.paramId.c_str()],
-        @"node" : @(p.node),
-        @"index" : @(p.index),
-        @"name" : [NSString stringWithUTF8String:p.name.c_str()],
-        @"unit" : [NSString stringWithUTF8String:p.unit.c_str()],
-        @"min" : boxed(p.min),
-        @"max" : boxed(p.max),
-        @"default" : boxed(p.defaultValue),
-        @"value" : boxed(m->toPlain(plugin_->normalized(p.id))),
-        @"logarithmic" : @(m->logarithmic),
-        @"steps" : @(m->steps),
-      }];
-    }
+    NSArray* params = foundationOf(welcomeParams(*plugin_));
     [channel_ invokeMethod:@"welcome" arguments:@{@"params" : params}];
   }
 
@@ -377,7 +407,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
   // layer. Polling stamps a frame up to 4 ms after its commit.
   void checkFrame() {
     NSMutableArray<CALayer*>* stack = [NSMutableArray array];
-    CALayer* root = controller_ != nil ? ((NSViewController*)controller_).view.layer : nil;
+    CALayer* root = controller_.view.layer;
     if (root != nil) [stack addObject:root];
     while (stack.count > 0) {
       CALayer* layer = stack.lastObject;
@@ -418,9 +448,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
       [channel_ setMethodCallHandler:nil];
       channel_ = nil;
     }
-    if (controller_ != nil) {
-      [((NSViewController*)controller_).view removeFromSuperview];
-    }
+    [controller_.view removeFromSuperview];
     if (engine_ != nil) {
       // Flutter's ResizeSynchronizer runs a present it scheduled for a
       // later vsync even after the view is gone, and the present reaches
@@ -428,8 +456,8 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
       // engine down at once crashed REAPER. Both live on until such
       // presents have run, the controller released first, as before.
       id<AudFlutterEngine> engine = engine_;
-      __block id controller = controller_;
-      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
+      __block NSViewController* controller = controller_;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kEngineShutdownDelayNs),
                      dispatch_get_main_queue(), ^{
                        controller = nil;
                        [engine shutDownEngine];
@@ -447,7 +475,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
   Plugin* plugin_;
   NSView* view_ = nil;
   id<AudFlutterEngine> engine_ = nil;
-  id controller_ = nil;
+  NSViewController* controller_ = nil;
   id<AudFlutterMethodChannel> channel_ = nil;
   NSTimer* meterTimer_ = nil;
   NSTimer* frameTimer_ = nil;
@@ -462,6 +490,7 @@ class FlutterEditorView : public CPluginView, public ViewDelegate, public ParamO
   SyntheticDrag drag_;
 };
 
+// #############################################################################
 IPlugView* createEditorView(Plugin* plugin) { return new FlutterEditorView(plugin); }
 
 }  // namespace aud_vst3

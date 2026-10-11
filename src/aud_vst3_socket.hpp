@@ -37,43 +37,65 @@
 
 namespace aud_vst3 {
 
+// #############################################################################
+// The server of the shell protocol's socket; see above.
 class SocketServer {
  public:
+  // ...........................................................................
   // [IPC thread] A message of connection `connection`.
   using MessageHandler =
       std::function<void(const aud::Json& message, uint64_t connection)>;
+
+  // ...........................................................................
   // [IPC thread] Connection `connection` started (true) or ended.
   using StateHandler = std::function<void(bool connected, uint64_t connection)>;
 
+  // ...........................................................................
+  // Creates the server; start() opens the socket. The handlers run on the
+  // IPC thread.
   SocketServer(MessageHandler onMessage, StateHandler onState);
+
+  // ...........................................................................
+  // Ends the IPC thread, closes the sockets and removes the socket's file.
   ~SocketServer();
 
+  // ...........................................................................
+  // Not copyable: the IPC thread works on this object.
   SocketServer(const SocketServer&) = delete;
   SocketServer& operator=(const SocketServer&) = delete;
 
+  // ...........................................................................
   // Binds a socket under `directory` with a random name and starts the IPC
   // thread; false when the socket cannot be created.
   bool start(const std::string& directory);
 
-  // [any thread] Queues a message for the current connection. A droppable
+  // ...........................................................................
+  // [any thread] Queues a message for the current connection once it is
+  // authenticated; until then the message goes nowhere. A droppable
   // message is dropped above the soft limit; above the hard limit the
   // connection is closed.
   void send(const aud::Json& message, bool droppable = false);
 
+  // ...........................................................................
   // [any thread] Marks `connection` as the editor's: it is no longer
   // replaced by a new one.
   void authenticate(uint64_t connection);
 
+  // ...........................................................................
   // [any thread] Ends `connection` if it is still the current one; the
   // server keeps listening.
   void disconnect(uint64_t connection);
 
+  // ...........................................................................
   // The path of the socket.
   const std::string& path() const { return path_; }
 
-  // The messages dropped, and the connections closed because the outbox
-  // overflowed, since the start.
+  // ...........................................................................
+  // The messages dropped since the start.
   uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+
+  // ...........................................................................
+  // The connections closed because the outbox overflowed, since the start.
   uint64_t overflows() const {
     return overflows_.load(std::memory_order_relaxed);
   }

@@ -13,6 +13,7 @@ import 'package:test/test.dart';
 
 void main() {
   group('AudShellClient', () {
+    const hello = AudShellHello(token: 'secret', instance: 3, pid: 9);
     late Directory dir;
     late ServerSocket server;
     late String path;
@@ -31,47 +32,80 @@ void main() {
       dir.deleteSync(recursive: true);
     });
 
-    test('says hello and exchanges messages', () async {
+    // Connects a client; returns it, the plugin's end of the socket and
+    // what the plugin receives.
+    Future<(AudShellClient, Socket, StreamIterator<AudShellMessage>)>
+    connect() async {
       final accepted = server.first;
-      final client = await AudShellClient.connect(
-        path,
-        const AudShellHello(token: 'secret', instance: 3, pid: 9),
-      );
+      final client = await AudShellClient.connect(path, hello);
       final plugin = await accepted;
-      final received = plugin.transform(AudShellCodec.decoder());
-      final fromEditor = StreamIterator(received);
-      expect(await fromEditor.moveNext(), isTrue);
-      expect((fromEditor.current as AudShellHello).token, 'secret');
+      final received = StreamIterator(
+        plugin.transform(AudShellCodec.decoder()),
+      );
+      return (client, plugin, received);
+    }
 
-      final fromPlugin = <AudShellMessage>[];
-      final done = Completer<void>();
-      client.messages.listen(fromPlugin.add, onDone: done.complete);
-      plugin.add(AudShellCodec.encode(const AudShellMeter(peak: 1, rms: 0)));
-      client.send(const AudShellCursor('basic'));
-      expect(await fromEditor.moveNext(), isTrue);
-      expect((fromEditor.current as AudShellCursor).kind, 'basic');
-      await plugin.close();
-      await done.future;
-      expect(fromPlugin.single, isA<AudShellMeter>());
-      await client.close();
-      await fromEditor.cancel();
+    group('connect(path, hello)', () {
+      test('introduces the editor with the hello', () async {
+        final (client, plugin, received) = await connect();
+        expect(await received.moveNext(), isTrue);
+        expect(received.current.toJson(), hello.toJson());
+        await client.close();
+        await received.cancel();
+      });
     });
 
-    test('reports a broken stream', () async {
-      final accepted = server.first;
-      final client = await AudShellClient.connect(
-        path,
-        const AudShellHello(token: 't', instance: 1, pid: 1),
-      );
-      final plugin = await accepted;
-      final error = Completer<Object>();
-      client.messages.listen((_) {}, onError: error.complete);
-      final header = Uint8List(4);
-      ByteData.sublistView(header).setUint32(0, 0xFFFFFFFF, Endian.little);
-      plugin.add(header);
-      expect(await error.future, isA<FormatException>());
-      await client.close();
-      plugin.destroy();
+    group('send(message)', () {
+      test('frames the message to the plugin', () async {
+        final (client, plugin, received) = await connect();
+        client.send(const AudShellCursor('basic'));
+        final messages = [
+          for (var i = 0; i < 2 && await received.moveNext(); ++i)
+            received.current.toJson(),
+        ];
+        expect(messages, [
+          hello.toJson(),
+          const AudShellCursor('basic').toJson(),
+        ]);
+        await client.close();
+        await received.cancel();
+      });
+    });
+
+    group('messages', () {
+      test('carries the plugin messages until it closes the socket', () async {
+        final (client, plugin, received) = await connect();
+        final fromPlugin = <AudShellMessage>[];
+        final done = Completer<void>();
+        client.messages.listen(fromPlugin.add, onDone: done.complete);
+        const meter = AudShellMeter(peak: 1, rms: 0);
+        plugin.add(AudShellCodec.encode(meter));
+        await plugin.close();
+        await done.future;
+        expect([for (final m in fromPlugin) m.toJson()], [meter.toJson()]);
+        await client.close();
+        await received.cancel();
+      });
+
+      test('reports a frame above maxFrame as an error', () async {
+        final (client, plugin, received) = await connect();
+        final error = Completer<Object>();
+        client.messages.listen((_) {}, onError: error.complete);
+        final header = Uint8List(4);
+        ByteData.sublistView(header).setUint32(0, 0xFFFFFFFF, Endian.little);
+        plugin.add(header);
+        expect(
+          await error.future,
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            'Shell frame of 4294967295 bytes',
+          ),
+        );
+        await client.close();
+        await received.cancel();
+        plugin.destroy();
+      });
     });
   });
 }

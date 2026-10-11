@@ -7,6 +7,7 @@
 import 'package:aud_audio_core/aud_audio_core.dart';
 import 'package:aud_audio_ui_controls/aud_audio_ui_controls.dart';
 import 'package:aud_audio_vst3/aud_audio_vst3.dart';
+import 'package:aud_audio_vst3_editor/src/aud_mach_clock.dart';
 import 'package:aud_audio_vst3_editor/src/aud_shell_param_sink.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -25,8 +26,8 @@ void main() {
     value: 1200,
     logarithmic: true,
   );
-  const address = AudParamAddress('filter', 'cutoff');
-  const unknown = AudParamAddress('osc', 'nothing');
+  const address = AudParamAddress(nodeId: 'filter', paramId: 'cutoff');
+  const unknown = AudParamAddress(nodeId: 'osc', paramId: 'nothing');
 
   group('AudShellParamSink', () {
     late List<AudShellMessage> sent;
@@ -47,23 +48,50 @@ void main() {
 
     tearDown(() => sink.close());
 
-    test('sends a value as a set-param command with the input stamp', () {
-      sink.setValue(address, 440);
-      final message = sent.single as AudShellCommand;
-      final command = message.command as AudSetParamCommand;
-      expect(command.node, 2);
-      expect(command.paramIndex, 0);
-      expect(command.value, 440);
-      expect(message.input, 42);
-      expect(message.instance, 3);
+    // What the sink sent, as JSON.
+    List<Map<String, Object?>> sentJson() => [
+      for (final message in sent) message.toJson(),
+    ];
+
+    group('setValue(address, value)', () {
+      test('sends a set-param command with the input stamp', () {
+        sink.setValue(address, 440);
+        expect(sentJson(), [
+          const AudShellCommand(
+            AudSetParamCommand(node: 2, paramIndex: 0, value: 440),
+            input: 42,
+            instance: 3,
+          ).toJson(),
+        ]);
+      });
     });
 
-    test('sends the gesture phases', () {
-      sink.beginGesture(address);
-      sink.endGesture(address);
-      final phases = sent.cast<AudShellGesture>().map((g) => g.phase);
-      expect(phases, [AudShellGesturePhase.begin, AudShellGesturePhase.end]);
-      expect(sent.cast<AudShellGesture>().first.node, 2);
+    group('beginGesture(address), endGesture(address)', () {
+      test('send the gesture phases', () {
+        sink.beginGesture(address);
+        sink.endGesture(address);
+        expect(sentJson(), [
+          for (final phase in AudShellGesturePhase.values)
+            AudShellGesture(
+              instance: 3,
+              node: 2,
+              paramIndex: 0,
+              phase: phase,
+            ).toJson(),
+        ]);
+      });
+    });
+
+    group('receive(value)', () {
+      test('passes a value of the plugin on as a change', () async {
+        final changes = <AudParamChange>[];
+        final subscription = sink.changes.listen(changes.add);
+        const value = AudShellParamValue(id: 7, value: 500, sequence: 4);
+        sink.receive(value);
+        expect(changes, [const AudParamChange(address: address, value: 500)]);
+        expect(applied, [value]);
+        await subscription.cancel();
+      });
     });
 
     test('ignores unknown parameters', () {
@@ -74,18 +102,42 @@ void main() {
       expect(applied, isEmpty);
     });
 
-    test('passes values of the plugin on as changes', () async {
-      final changes = <AudParamChange>[];
-      final subscription = sink.changes.listen(changes.add);
-      sink.receive(const AudShellParamValue(id: 7, value: 500, sequence: 4));
-      expect(changes.single, const AudParamChange(address, 500));
-      expect(applied.single.sequence, 4);
-      await subscription.cancel();
+    group('param(address)', () {
+      test('finds a parameter by its address', () {
+        expect([sink.param(address), sink.param(unknown)], [cutoff, null]);
+      });
+    });
+  });
+
+  group('audProbeApplied(send, instance)', () {
+    late List<AudShellMessage> sent;
+
+    setUp(() => sent = []);
+
+    test('probes a numbered change with its sequence, id and time', () {
+      final before = AudMachClock.nowNs();
+      audProbeApplied(send: sent.add, instance: 3)(
+        const AudShellParamValue(id: 7, value: 500, sequence: 4),
+      );
+      final after = AudMachClock.nowNs();
+      expect(
+        [for (final message in sent) message.toJson()],
+        [
+          {
+            'type': 'probe',
+            'instance': 3,
+            'kind': 'paramApplied',
+            'fields': {'seq': 4, 'id': 7, 't': inInclusiveRange(before, after)},
+          },
+        ],
+      );
     });
 
-    test('finds a parameter by its address', () {
-      expect(sink.param(address), cutoff);
-      expect(sink.param(unknown), isNull);
+    test('probes no change without a number', () {
+      audProbeApplied(send: sent.add)(
+        const AudShellParamValue(id: 7, value: 500),
+      );
+      expect(sent, isEmpty);
     });
   });
 }

@@ -23,6 +23,9 @@
 #ifndef AUD_VST3_CONFIG_HPP
 #define AUD_VST3_CONFIG_HPP
 
+// #############################################################################
+// The defaults for a build without the defines: variant D, flavor 1 and
+// the version of the spike.
 #ifndef AUD_VST3_VARIANT
 #define AUD_VST3_VARIANT 'D'
 #endif
@@ -35,6 +38,7 @@
 #define AUD_VST3_VERSION "0.1.0"
 #endif
 
+// #############################################################################
 // With AUD_VST3_RTSAN the realtime path of the plugin carries Clang's
 // nonblocking effect, so that RealtimeSanitizer checks what it calls.
 #if AUD_VST3_RTSAN && defined(__clang__)
@@ -45,12 +49,17 @@
 
 namespace aud_vst3 {
 
+// #############################################################################
 // The editor variant of this build.
 constexpr char kVariant = AUD_VST3_VARIANT;
 
+// #############################################################################
 // The engine flavor of this build.
 constexpr int kFlavor = AUD_VST3_FLAVOR;
 
+// #############################################################################
+// Whether this build hides its symbols and names its view class at random;
+// false in the control build (AUD_VST3_NO_HYGIENE).
 #ifdef AUD_VST3_NO_HYGIENE
 constexpr bool kHygiene = false;
 #else

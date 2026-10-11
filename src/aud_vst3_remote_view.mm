@@ -34,7 +34,6 @@
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
-#include <dlfcn.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
@@ -43,20 +42,26 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "aud_audio_graph.h"
 #include "aud_json.hpp"
+#include "public.sdk/source/common/pluginview.h"
+
 #include "aud_vst3_driver.hpp"
 #include "aud_vst3_layout.hpp"
 #include "aud_vst3_objc.hpp"
 #include "aud_vst3_plugin.hpp"
+#include "aud_vst3_probe.hpp"
+#include "aud_vst3_shell.hpp"
 #include "aud_vst3_socket.hpp"
 #include "aud_vst3_surfaces.hpp"
-#include "public.sdk/source/common/pluginview.h"
 
 extern char** environ;
 
@@ -69,29 +74,31 @@ namespace {
 constexpr bool kFollow = AUD_VST3_VARIANT == 'F';
 constexpr bool kShared = AUD_VST3_VARIANT == 'S';
 
+// The version of the shell protocol (audShellProtocolVersion).
+constexpr int kProtocolVersion = 1;
+
+// How long a started editor may take to say hello before it is killed and
+// started again.
+constexpr int64_t kHelloTimeoutNs = 10'000'000'000;
+
+// How long an editor whose socket ended may take to quit before it is
+// killed.
+constexpr int64_t kKillGraceNs = 1'000'000'000;
+
+// The starts in a row without a hello after which no editor is started.
+constexpr int kMaxFailedStarts = 5;
+
+// The shortest time from one start of a crashed editor to the next.
+constexpr int64_t kRestartIntervalNs = 2'000'000'000;
+
+// How long an editor whose last view closed stays warm by default.
+constexpr double kWarmSeconds = 10;
+
 // How long an editor whose last view closed stays warm;
-// AUD_VST3_WARM_SECONDS overrides it, 0 closes at once.
+// AUD_VST3_WARM_SECONDS overrides kWarmSeconds, 0 closes at once.
 double warmSeconds() {
   const char* value = std::getenv("AUD_VST3_WARM_SECONDS");
-  return value != nullptr ? std::atof(value) : 10.0;
-}
-
-std::string bundlePath() {
-  Dl_info info{};
-  if (dladdr(reinterpret_cast<const void*>(&bundlePath), &info) == 0 ||
-      info.dli_fname == nullptr) {
-    return {};
-  }
-  // <bundle>.vst3/Contents/MacOS/<binary>
-  std::string path = info.dli_fname;
-  for (int i = 0; i < 3; ++i) path = path.substr(0, path.rfind('/'));
-  return path;
-}
-
-std::string logDirectory() {
-  const char* home = std::getenv("HOME");
-  return std::string(home != nullptr ? home : "/tmp") +
-         "/Library/Logs/aud_audio_vst3";
+  return value != nullptr ? std::atof(value) : kWarmSeconds;
 }
 
 std::string tempDirectory() {
@@ -108,11 +115,18 @@ std::string randomToken() {
   return token;
 }
 
-int64_t stampOf(NSEvent* event) {
-  return static_cast<int64_t>(event.timestamp * 1e9);
-}
-
 aud::Json number(double value) { return aud::Json::ofNumber(value); }
+
+// The member `key` of `json` if it is an integer from `min` to `max`. The
+// editor is another process: none of its numbers is cast unchecked.
+std::optional<int64_t> integerIn(const aud::Json& json, const char* key,
+                                 int64_t min, int64_t max) {
+  const aud::Json* value = json.find(key);
+  if (value == nullptr || !value->isInteger()) return std::nullopt;
+  const int64_t integer = value->integer();
+  if (integer < min || integer > max) return std::nullopt;
+  return integer;
+}
 
 aud::Json message(const char* type) {
   aud::Json json = aud::Json::ofObject();
@@ -144,12 +158,16 @@ NSCursor* cursorOf(const std::string& kind) {
 
 class RemoteView;
 
+// #############################################################################
 // The editor process and its two channels; all of it runs on the host's UI
 // thread except the channels' own threads. A and F give every plugin
 // instance a host of its own, S shares one among the instances of this
 // plugin build.
 class EditorHost : public std::enable_shared_from_this<EditorHost> {
  public:
+  // ...........................................................................
+  // The host for a new view of this plugin build: a new one in A and F,
+  // the one every instance of the build shares in S.
   static std::shared_ptr<EditorHost> forPlugin() {
     if (!kShared) return std::make_shared<EditorHost>();
     // Hidden symbols make this one per plugin build, never shared with
@@ -163,14 +181,24 @@ class EditorHost : public std::enable_shared_from_this<EditorHost> {
     return host;
   }
 
+  // ...........................................................................
+  // Stops the meters and the editor process.
   ~EditorHost() {
     stopMeters();
     stopProcess();
   }
 
+  // ...........................................................................
+  // Adds `view` of `plugin` and shows it in the editor, which it starts
+  // when none runs.
   void attach(Plugin* plugin, RemoteView* view);
+
+  // ...........................................................................
+  // Takes `view` of `plugin` away: the editor hides it, and quits after
+  // warmSeconds() without a view.
   void detach(Plugin* plugin, RemoteView* view);
 
+  // ...........................................................................
   // The plugin instance is gone.
   void remove(Plugin* plugin) {
     const auto it = clients_.find(plugin->instance());
@@ -181,18 +209,28 @@ class EditorHost : public std::enable_shared_from_this<EditorHost> {
     send(plugin->instance(), message("remove"));
   }
 
+  // ...........................................................................
+  // Sends `json` as a message of plugin instance `instance` once the
+  // editor said hello; SocketServer::send() tells what `droppable` means.
   void send(uint32_t instance, aud::Json json, bool droppable = false) {
     if (server_ == nullptr || !ready_) return;
     json.set("instance", number(instance));
     server_->send(json, droppable);
   }
 
+  // ...........................................................................
+  // Hands surface `index` of `instance` back to the editor.
   void releaseSurface(uint32_t instance, uint32_t index, uint32_t generation) {
     if (surfaces_ != nullptr) surfaces_->release(instance, index, generation);
   }
 
+  // ...........................................................................
+  // The number of the next parameter message, which the probes of both
+  // processes record.
   uint64_t nextParamSequence() { return ++paramSequence_; }
 
+  // ...........................................................................
+  // Whether the editor said hello and takes messages.
   bool ready() const { return ready_; }
 
  private:
@@ -248,13 +286,21 @@ class EditorHost : public std::enable_shared_from_this<EditorHost> {
   int64_t lastRestart_ = 0;
 };
 
+// #############################################################################
 // What a plugin instance keeps: its host and its place in it.
 class HostedEditor : public EditorState {
  public:
+  // ...........................................................................
+  // Keeps `host` for `plugin`.
   HostedEditor(Plugin* plugin, std::shared_ptr<EditorHost> host)
       : plugin_(plugin), host_(std::move(host)) {}
+
+  // ...........................................................................
+  // Takes the plugin instance out of its host.
   ~HostedEditor() override { host_->remove(plugin_); }
 
+  // ...........................................................................
+  // The host of the plugin instance.
   const std::shared_ptr<EditorHost>& host() const { return host_; }
 
  private:
@@ -262,9 +308,12 @@ class HostedEditor : public EditorState {
   std::shared_ptr<EditorHost> host_;
 };
 
+// #############################################################################
 // The plugin's view of variants A, S and F.
 class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver {
  public:
+  // ...........................................................................
+  // Creates the view of `plugin`, which it holds and observes.
   explicit RemoteView(Plugin* plugin) : CPluginView(nullptr), plugin_(plugin) {
     ViewRect size(0, 0, static_cast<int32>(kEditorWidth),
                   static_cast<int32>(kEditorHeight));
@@ -275,11 +324,16 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     plugin_->addObserver(this);
   }
 
+  // ...........................................................................
+  // Tears the view down and lets the plugin go.
   ~RemoteView() override {
     plugin_->removeObserver(this);
     teardown();
     plugin_->release();
   }
+
+  // ###########################################################################
+  // IPlugView
 
   tresult PLUGIN_API isPlatformTypeSupported(FIDString type) SMTG_OVERRIDE {
     return std::strcmp(type, kPlatformTypeNSView) == 0 ? kResultTrue
@@ -293,7 +347,9 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     NSView* parentView = (__bridge NSView*)parent;
     view_ = makeView(this, NSMakeRect(0, 0, rect.getWidth(), rect.getHeight()));
     CALayer* root = [CALayer layer];
-    CGColorRef background = CGColorCreateGenericRGB(0.11, 0.12, 0.14, 1);
+    CGColorRef background =
+        CGColorCreateGenericRGB(kEditorBackground.red, kEditorBackground.green,
+                                kEditorBackground.blue, 1);
     root.backgroundColor = background;
     CGColorRelease(background);
     view_.layer = root;
@@ -351,6 +407,10 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     return kResultTrue;
   }
 
+  // ###########################################################################
+  // The editor host
+
+  // ...........................................................................
   // The geometry of the view for the editor; remembers the visibility it
   // reports.
   aud::Json place() {
@@ -359,15 +419,13 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     NSRect onScreen = NSZeroRect;
     double scale = 2;
     int64_t windowNumber = 0;
-    bool visible = false;
     if (window != nil) {
       onScreen = [window convertRectToScreen:[view_ convertRect:view_.bounds
                                                          toView:nil]];
       scale = window.backingScaleFactor;
       windowNumber = window.windowNumber;
-      visible = window.isVisible && !window.isMiniaturized &&
-                (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
     }
+    const bool seen = visible();
     json.set("x", number(onScreen.origin.x));
     json.set("y", number(onScreen.origin.y));
     json.set("width", number(view_ != nil ? view_.bounds.size.width : kEditorWidth));
@@ -375,11 +433,11 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
              number(view_ != nil ? view_.bounds.size.height : kEditorHeight));
     json.set("scale", number(scale));
     json.set("window", number(static_cast<double>(windowNumber)));
-    json.set("visible", aud::Json::ofBool(visible));
-    sentVisible_ = visible;
+    json.set("visible", aud::Json::ofBool(seen));
+    sentVisible_ = seen;
     plugin_->probe().write(
         "place",
-        std::string("\"visible\":") + (visible ? "true" : "false") +
+        std::string("\"visible\":") + (seen ? "true" : "false") +
             ",\"windowVisible\":" + (window != nil && window.isVisible ? "true" : "false") +
             ",\"occlusion\":" +
             std::to_string(window != nil ? static_cast<unsigned long>(window.occlusionState)
@@ -390,10 +448,13 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     return json;
   }
 
+  // ...........................................................................
+  // Sends the place to the editor.
   void sendPlace() {
     if (host_ != nullptr && view_ != nil) host_->send(plugin_->instance(), place());
   }
 
+  // ...........................................................................
   // Whether the view can be seen: in a visible window that is not
   // miniaturized, not occluded and on the current Space.
   bool visible() const {
@@ -402,8 +463,7 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
            (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
   }
 
-  Plugin* plugin() const { return plugin_; }
-
+  // ...........................................................................
   // Sends the place again when the view became visible or hidden without a
   // window notification: the first place can report the view hidden (a
   // host orders its window in after attaching the view), and not every
@@ -413,6 +473,7 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     if (view_ != nil && visible() != sentVisible_) sendPlace();
   }
 
+  // ...........................................................................
   // Shows a frame of the editor (A and S).
   void showFrame(const SurfaceFrame& frame) {
     if (view_ == nil) {
@@ -445,7 +506,8 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     }
   }
 
-  // The editor took the instance (F shows nothing of its own).
+  // ...........................................................................
+  // Learns that the editor shows the instance (F shows nothing of its own).
   void editorReady() {
     if (kFollow && firstFrame_) {
       firstFrame_ = false;
@@ -456,11 +518,14 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
     }
   }
 
+  // ...........................................................................
+  // Sets the cursor the editor asks for over the view.
   void setCursor(const std::string& kind) {
     cursorKind_ = kind;
     [cursorOf(kind) set];
   }
 
+  // ###########################################################################
   // ViewDelegate
 
   void mouseEvent(NSView* view, NSEvent* event) override {
@@ -570,6 +635,7 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
 
   void cursorUpdate(NSView*, NSEvent*) override { [cursorOf(cursorKind_) set]; }
 
+  // ###########################################################################
   // ParamObserver
 
   void paramChanged(uint32_t id, double normalized) override {
@@ -589,13 +655,8 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
 
   void testRequested() override {
     if (view_ == nil || drag_.running() || kFollow) return;
-    uint32_t id = 0;
-    for (const EngineParam& param : plugin_->params()) {
-      if (param.nodeId == kKnobs[kTestKnob].nodeId &&
-          param.paramId == kKnobs[kTestKnob].paramId) {
-        id = param.id;
-      }
-    }
+    const uint32_t id =
+        aud_host_param_id(kKnobs[kTestKnob].nodeId, kKnobs[kTestKnob].paramId);
     plugin_->probe().write("testStart", std::string("\"variant\":\"") +
                                             kVariant + "\",\"id\":" +
                                             std::to_string(id));
@@ -613,6 +674,9 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
               "testEnd", std::string("\"variant\":\"") + kVariant + "\"");
         });
   }
+
+  // ###########################################################################
+  // FUnknown
 
   OBJ_METHODS(RemoteView, CPluginView)
   REFCOUNT_METHODS(CPluginView)
@@ -698,9 +762,10 @@ class RemoteView : public CPluginView, public ViewDelegate, public ParamObserver
   SyntheticDrag drag_;
 };
 
-// ............................................................................
+// #############################################################################
 // EditorHost
 
+// .............................................................................
 void EditorHost::attach(Plugin* plugin, RemoteView* view) {
   Client& client = clients_[plugin->instance()];
   client.plugin = plugin;
@@ -715,6 +780,7 @@ void EditorHost::attach(Plugin* plugin, RemoteView* view) {
   if (ready_) open(plugin->instance());
 }
 
+// .............................................................................
 void EditorHost::detach(Plugin* plugin, RemoteView* view) {
   const auto it = clients_.find(plugin->instance());
   if (it == clients_.end() || it->second.view != view) return;
@@ -751,28 +817,8 @@ void EditorHost::open(uint32_t instance) {
   Plugin* plugin = it->second.plugin;
   aud::Json welcome = message("welcome");
   welcome.set("name", aud::Json::ofString("aud_audio_vst3 spike"));
-  welcome.set("version", number(1));
-  aud::Json params = aud::Json::ofArray();
-  for (const EngineParam& p : plugin->params()) {
-    const ParamMapping* m = plugin->mapping(p.id);
-    if (m == nullptr) continue;
-    aud::Json param = aud::Json::ofObject();
-    param.set("id", number(p.id));
-    param.set("nodeId", aud::Json::ofString(p.nodeId));
-    param.set("paramId", aud::Json::ofString(p.paramId));
-    param.set("node", number(p.node));
-    param.set("index", number(p.index));
-    param.set("name", aud::Json::ofString(p.name));
-    param.set("unit", aud::Json::ofString(p.unit));
-    param.set("min", number(p.min));
-    param.set("max", number(p.max));
-    param.set("default", number(p.defaultValue));
-    param.set("value", number(m->toPlain(plugin->normalized(p.id))));
-    param.set("logarithmic", aud::Json::ofBool(m->logarithmic));
-    param.set("steps", number(m->steps));
-    params.push(std::move(param));
-  }
-  welcome.set("params", std::move(params));
+  welcome.set("version", number(kProtocolVersion));
+  welcome.set("params", welcomeParams(*plugin));
   const aud::Json place = it->second.view->place();
   for (const char* key : {"width", "height", "scale"}) {
     const aud::Json* value = place.find(key);
@@ -786,7 +832,7 @@ void EditorHost::open(uint32_t instance) {
 void EditorHost::startMeters() {
   if (meterTimer_ != nil) return;
   std::weak_ptr<EditorHost> weak = shared_from_this();
-  meterTimer_ = [NSTimer timerWithTimeInterval:1.0 / 30
+  meterTimer_ = [NSTimer timerWithTimeInterval:kMeterPeriod
                                        repeats:YES
                                          block:^(NSTimer*) {
                                            if (auto self = weak.lock()) self->sendMeters();
@@ -934,7 +980,7 @@ bool EditorHost::spawn(Plugin* plugin) {
   });
   dispatch_resume(source);
   // An editor that never says hello is killed and started again.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10'000'000'000),
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kHelloTimeoutNs),
                  dispatch_get_main_queue(), ^{
                    auto self = weak.lock();
                    if (self == nullptr || self->pid_ != pid || self->ready_ || !*alive) {
@@ -954,7 +1000,7 @@ bool EditorHost::spawn(Plugin* plugin) {
 void EditorHost::killLater(pid_t pid) {
   std::shared_ptr<bool> alive = alive_;
   if (pid <= 0 || alive == nullptr) return;
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1'000'000'000),
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kKillGraceNs),
                  dispatch_get_main_queue(), ^{
                    if (*alive) kill(pid, SIGKILL);
                  });
@@ -995,11 +1041,12 @@ void EditorHost::connectionLost(uint64_t connection) {
 // A new editor for the open views, at most every 2 s, and not after five
 // starts in a row that never said hello.
 void EditorHost::scheduleRestart() {
-  if (failedStarts_ >= 5) {
+  if (failedStarts_ >= kMaxFailedStarts) {
     if (Probe* p = probe()) p->write("error", "\"message\":\"editor gave up\"");
     return;
   }
-  const int64_t wait = std::max<int64_t>(0, lastRestart_ + 2'000'000'000 - nowNs());
+  const int64_t wait =
+      std::max<int64_t>(0, lastRestart_ + kRestartIntervalNs - nowNs());
   std::weak_ptr<EditorHost> weak = shared_from_this();
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, wait), dispatch_get_main_queue(), ^{
     auto self = weak.lock();
@@ -1055,25 +1102,24 @@ void EditorHost::handle(const aud::Json& json, uint64_t connection) {
     return;
   }
   if (!ready_ || connection != connection_) return;
-  const aud::Json* instanceField = json.find("instance");
-  if (instanceField == nullptr) return;
-  const auto it = clients_.find(static_cast<uint32_t>(instanceField->number));
+  const std::optional<int64_t> instance =
+      integerIn(json, "instance", 0, std::numeric_limits<uint32_t>::max());
+  if (!instance) return;
+  const auto it = clients_.find(static_cast<uint32_t>(*instance));
   if (it == clients_.end()) return;
   Plugin* plugin = it->second.plugin;
   RemoteView* view = it->second.view;
   if (kind == "command" || kind == "gesture") {
     const aud::Json* command = kind == "command" ? json.find("command") : &json;
     if (command == nullptr) return;
-    const aud::Json* node = command->find("node");
-    const aud::Json* index = command->find("paramIndex");
-    if (node == nullptr || index == nullptr) return;
-    const EngineParam* param = nullptr;
-    for (const EngineParam& p : plugin->params()) {
-      if (p.node == static_cast<int32_t>(node->number) &&
-          p.index == static_cast<uint32_t>(index->number)) {
-        param = &p;
-      }
-    }
+    const std::optional<int64_t> node =
+        integerIn(*command, "node", std::numeric_limits<int32_t>::min(),
+                  std::numeric_limits<int32_t>::max());
+    const std::optional<int64_t> index = integerIn(
+        *command, "paramIndex", 0, std::numeric_limits<uint32_t>::max());
+    if (!node || !index) return;
+    const EngineParam* param = plugin->param(static_cast<int32_t>(*node),
+                                             static_cast<uint32_t>(*index));
     if (param == nullptr) return;
     // Edits belong to a view: those of a closed one were ended with it.
     if (view == nullptr) return;
@@ -1085,13 +1131,20 @@ void EditorHost::handle(const aud::Json& json, uint64_t connection) {
     }
     const aud::Json* name = command->find("command");
     const aud::Json* value = command->find("value");
-    if (name == nullptr || name->string != "setParam" || value == nullptr) return;
+    if (name == nullptr || name->string != "setParam" || value == nullptr ||
+        !value->isNumber()) {
+      return;
+    }
     const ParamMapping* m = plugin->mapping(param->id);
     if (m == nullptr) return;
-    const aud::Json* inputStamp = json.find("input");
-    plugin->edit(param->id, m->toNormalized(static_cast<float>(value->number)),
-                 inputStamp != nullptr ? static_cast<int64_t>(inputStamp->number) : 0,
-                 view);
+    // Clamped before it becomes a float, which cannot hold every number.
+    const double plain =
+        std::min<double>(m->max, std::max<double>(m->min, value->number));
+    const int64_t inputStamp =
+        integerIn(json, "input", 0, std::numeric_limits<int64_t>::max())
+            .value_or(0);
+    plugin->edit(param->id, m->toNormalized(static_cast<float>(plain)),
+                 inputStamp, view);
     return;
   }
   if (kind == "cursor") {
@@ -1102,16 +1155,19 @@ void EditorHost::handle(const aud::Json& json, uint64_t connection) {
   if (kind == "probe") {
     const aud::Json* probeKind = json.find("kind");
     const aud::Json* fields = json.find("fields");
-    if (probeKind != nullptr && fields != nullptr && fields->isObject()) {
-      plugin->probe().write(probeKind->string.c_str(), probeFields(*fields));
-      // F shows nothing of its own: its first frame is the editor's
-      // window shown over the view.
-      if (probeKind->string == "shown" && view != nullptr) view->editorReady();
+    if (probeKind == nullptr || !isProbeKind(probeKind->string) ||
+        fields == nullptr || !fields->isObject()) {
+      return;
     }
+    plugin->probe().write(probeKind->string.c_str(), probeFields(*fields));
+    // F shows nothing of its own: its first frame is the editor's window
+    // shown over the view.
+    if (probeKind->string == "shown" && view != nullptr) view->editorReady();
     return;
   }
 }
 
+// #############################################################################
 IPlugView* createEditorView(Plugin* plugin) { return new RemoteView(plugin); }
 
 }  // namespace aud_vst3

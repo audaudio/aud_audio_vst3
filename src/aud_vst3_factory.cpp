@@ -8,10 +8,14 @@
 // the check a build runs under (watchdog, RealtimeSanitizer) make the class
 // id and the name, so every bundle of the spike coexists in one host.
 
-#include "aud_vst3_config.hpp"
-#include "aud_vst3_plugin.hpp"
 #include "public.sdk/source/main/pluginfactory.h"
 
+#include "aud_vst3_config.hpp"
+#include "aud_vst3_plugin.hpp"
+
+// #############################################################################
+// The parts of the class id and of the name: hygiene, the check of the
+// build and the variant.
 #define AUD_VST3_STRINGIFY2(x) #x
 #define AUD_VST3_STRINGIFY(x) AUD_VST3_STRINGIFY2(x)
 
@@ -52,6 +56,8 @@
   "Aud Spike " AUD_VST3_VARIANT_NAME AUD_VST3_STRINGIFY(        \
       AUD_VST3_FLAVOR) AUD_VST3_HYGIENE_NAME AUD_VST3_CHECK_NAME
 
+// #############################################################################
+// The factory of the bundle: one class, the plugin of this build.
 BEGIN_FACTORY_DEF("Audanika", "https://github.com/audaudio/aud_audio_vst3",
                   "mailto:info@audanika.com")
 

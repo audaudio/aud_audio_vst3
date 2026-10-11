@@ -48,9 +48,14 @@ std::string frameOf(const aud::Json& message) {
 
 }  // namespace
 
+// #############################################################################
+// SocketServer
+
+// .............................................................................
 SocketServer::SocketServer(MessageHandler onMessage, StateHandler onState)
     : onMessage_(std::move(onMessage)), onState_(std::move(onState)) {}
 
+// .............................................................................
 SocketServer::~SocketServer() {
   stopping_ = true;
   wake();
@@ -62,6 +67,7 @@ SocketServer::~SocketServer() {
   if (!path_.empty()) unlink(path_.c_str());
 }
 
+// .............................................................................
 bool SocketServer::start(const std::string& directory) {
   char name[64];
   std::snprintf(name, sizeof(name), "/aud-vst3-%d-%08x.sock", getpid(),
@@ -87,11 +93,14 @@ bool SocketServer::start(const std::string& directory) {
   return true;
 }
 
+// .............................................................................
 void SocketServer::send(const aud::Json& message, bool droppable) {
   std::string frame = frameOf(message);
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (connection_ == 0) return;
+    // Only the editor's connection: one that replaced it may not be the
+    // editor's, and a late message of the old one must not reach it.
+    if (connection_ == 0 || authenticated_ != connection_) return;
     if (droppable && outboxBytes_ > kOutboxLimit) {
       dropped_.fetch_add(1, std::memory_order_relaxed);
       return;
@@ -112,11 +121,13 @@ void SocketServer::send(const aud::Json& message, bool droppable) {
   wake();
 }
 
+// .............................................................................
 void SocketServer::authenticate(uint64_t connection) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (connection_ == connection) authenticated_ = connection;
 }
 
+// .............................................................................
 void SocketServer::disconnect(uint64_t connection) {
   {
     std::lock_guard<std::mutex> lock(mutex_);

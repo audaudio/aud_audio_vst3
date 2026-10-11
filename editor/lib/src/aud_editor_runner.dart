@@ -8,7 +8,7 @@ import 'package:aud_audio_vst3/aud_audio_vst3.dart';
 import 'package:flutter/services.dart';
 
 // #############################################################################
-/// The native runner of the editor (macos/Runner/MainFlutterWindow.swift):
+/// The native runner of the editor (macos/Runner/AudEditorViews.swift):
 /// a window and a Flutter view per plugin instance, placed over the
 /// plugin's view.
 class AudEditorRunner {

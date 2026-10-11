@@ -24,6 +24,7 @@
 // Usage:
 //   node scripts/vendor-vst3sdk.js [--sdk <checkout>] [--tag <tag>]
 //     [--dest src/third_party/vst3sdk]
+//   --dest names a folder directly inside src/third_party.
 
 'use strict';
 
@@ -196,6 +197,21 @@ function commitOf(dir) {
   return run('git', ['rev-parse', '--short', 'HEAD'], dir).trim();
 }
 
+// The destination `option` names. The script empties it and writes
+// NOTICES.md next to it, so it must be a folder directly inside
+// src/third_party: `--dest .` would delete the repo.
+function destinationOf(option) {
+  const thirdParty = path.join(root, 'src', 'third_party');
+  const dest = path.resolve(root, option);
+  if (path.dirname(dest) !== thirdParty) {
+    throw new Error(
+      `--dest must be a folder directly inside ${path.relative(root, thirdParty)}, ` +
+        `not ${option}`,
+    );
+  }
+  return dest;
+}
+
 function notices(sdk, tag) {
   const commits = submodules
     .filter((name) => name !== 'cmake')
@@ -236,11 +252,10 @@ VST is a registered trademark of Steinberg Media Technologies GmbH.
 function main() {
   const args = process.argv.slice(2);
   const tag = option(args, '--tag', defaultTag);
-  const sdk = path.resolve(option(args, '--sdk', '') || checkout(tag));
-  const dest = path.resolve(
-    root,
+  const dest = destinationOf(
     option(args, '--dest', path.join('src', 'third_party', 'vst3sdk')),
   );
+  const sdk = path.resolve(option(args, '--sdk', '') || checkout(tag));
   const { plugin, validator } = translationUnits(sdk);
   const headers = headerClosure(sdk, unique([...plugin, ...validator]));
   fs.rmSync(dest, { recursive: true, force: true });

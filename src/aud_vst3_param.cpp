@@ -17,6 +17,10 @@ namespace aud_vst3 {
 
 using Steinberg::Vst::ParamValue;
 
+// #############################################################################
+// ParamMapping
+
+// .............................................................................
 ParamMapping ParamMapping::of(const EngineParam& param) {
   ParamMapping mapping;
   mapping.id = param.id;
@@ -30,6 +34,7 @@ ParamMapping ParamMapping::of(const EngineParam& param) {
   return mapping;
 }
 
+// .............................................................................
 float ParamMapping::toPlain(double normalized) const {
   const double n = std::min(1.0, std::max(0.0, normalized));
   double plain;
@@ -44,6 +49,7 @@ float ParamMapping::toPlain(double normalized) const {
   return static_cast<float>(std::min<double>(max, std::max<double>(min, plain)));
 }
 
+// .............................................................................
 double ParamMapping::toNormalized(float plain) const {
   const double p = std::min<double>(max, std::max<double>(min, plain));
   if (max <= min) return 0;
@@ -53,6 +59,10 @@ double ParamMapping::toNormalized(float plain) const {
   return (p - min) / (static_cast<double>(max) - min);
 }
 
+// #############################################################################
+// AudParameter
+
+// .............................................................................
 AudParameter::AudParameter(const EngineParam& param)
     : mapping_(ParamMapping::of(param)) {
   Steinberg::UString(info.title, USTRINGSIZE(info.title))

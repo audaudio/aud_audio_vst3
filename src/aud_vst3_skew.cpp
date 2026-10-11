@@ -8,6 +8,7 @@
 
 namespace aud_vst3 {
 
+// #############################################################################
 bool skewCheck() {
   SkewRegistry& registry = skewRegistry();
   if (registry.flavor == 0) registry.flavor = AUD_VST3_FLAVOR;

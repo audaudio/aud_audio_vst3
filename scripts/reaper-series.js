@@ -64,12 +64,20 @@ function runs() {
   return list;
 }
 
+// The number an option names; anything else throws, so that a typo cannot
+// reach every run of the series as NaN.
+function numberArg(name, value) {
+  const number = typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  if (!Number.isFinite(number)) throw new Error(`${name} takes a number, not ${value}`);
+  return number;
+}
+
 function parseArgs(argv) {
   const options = { only: null, list: false, idle: 90, attempts: 8 };
   for (let i = 0; i < argv.length; ++i) {
     if (argv[i] === '--only') options.only = new RegExp(argv[++i]);
     else if (argv[i] === '--list') options.list = true;
-    else if (argv[i] === '--idle') options.idle = Number(argv[++i]);
+    else if (argv[i] === '--idle') options.idle = numberArg(argv[i], argv[++i]);
     else throw new Error(`Unknown option ${argv[i]}`);
   }
   return options;

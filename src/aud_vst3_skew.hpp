@@ -21,15 +21,23 @@
 
 namespace aud_vst3 {
 
+// #############################################################################
+// The registry the two flavors share by name, in the layout of this one.
 struct SkewRegistry {
 #if AUD_VST3_FLAVOR == 2
+  // ...........................................................................
   // Flavor 2 grew members before the fields both flavors share.
   uint64_t grown[3];
 #endif
+
+  // ...........................................................................
+  // The flavor that claimed the registry first, 0 before, and the count of
+  // the claims.
   uint32_t flavor;
   uint32_t claims;
 };
 
+// #############################################################################
 // A function-local static of an inline function: one weak definition per
 // image, coalesced across images unless hidden.
 inline SkewRegistry& skewRegistry() {
@@ -37,6 +45,7 @@ inline SkewRegistry& skewRegistry() {
   return registry;
 }
 
+// #############################################################################
 // Claims the registry for this image's flavor; false when the registry the
 // image reaches was claimed by the other flavor or has the other layout.
 bool skewCheck();

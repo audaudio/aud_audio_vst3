@@ -36,89 +36,137 @@
 
 #include "aud_audio_graph.h"
 #include "aud_spsc_queue.hpp"
+
 #include "aud_vst3_probe.hpp"
 
 namespace aud_vst3 {
 
+// #############################################################################
 // A parameter of the loaded document.
 struct EngineParam {
-  uint32_t id = 0;  // the stable id: FNV-1a of "<node id>/<param id>"
+  // ...........................................................................
+  // The stable id: FNV-1a of "<node id>/<param id>".
+  uint32_t id = 0;
+
+  // ...........................................................................
+  // The node id and the parameter id in the document.
   std::string nodeId;
   std::string paramId;
+
+  // ...........................................................................
+  // The name and the unit of the parameter's descriptor.
   std::string name;
   std::string unit;
-  int32_t node = 0;    // the node handle
-  uint32_t index = 0;  // the index in the node's descriptor
+
+  // ...........................................................................
+  // The node handle, and the index of the parameter in the node's
+  // descriptor.
+  int32_t node = 0;
+  uint32_t index = 0;
+
+  // ...........................................................................
+  // The range of the plain value, and the value the bundled document sets.
   float min = 0;
   float max = 1;
   float defaultValue = 0;
-  uint32_t flags = 0;  // AUD_PARAM_*
-  uint32_t steps = 0;  // with AUD_PARAM_STEPPED
+
+  // ...........................................................................
+  // The AUD_PARAM_* flags, and the steps of an AUD_PARAM_STEPPED one.
+  uint32_t flags = 0;
+  uint32_t steps = 0;
 };
 
+// #############################################################################
 // The meter of the output.
 struct EngineMeter {
+  // ...........................................................................
+  // The peak and the RMS level, each the higher of the two channels.
   float peak = 0;
   float rms = 0;
 };
 
+// #############################################################################
+// The graph, its host and the control thread that owns both; see above.
 class Engine {
  public:
+  // ...........................................................................
+  // Starts the control thread; `probe` takes the records of the realtime
+  // thread and the lines of the control thread.
   explicit Engine(Probe& probe);
+
+  // ...........................................................................
+  // Destroys the host and the graph on the control thread, then ends the
+  // thread. No realtime call may be in flight.
   ~Engine();
 
+  // ...........................................................................
+  // Not copyable: the control thread works on this object.
   Engine(const Engine&) = delete;
   Engine& operator=(const Engine&) = delete;
 
+  // ...........................................................................
   // [non-realtime] Creates the graph and the host on the control thread
   // and loads `document`; false with `error` on a failure.
   bool open(const std::string& document, double sampleRate,
             uint32_t maxFrames, std::string* error);
 
+  // ...........................................................................
   // The parameters of the loaded document, ordered by id. Stable after
   // open(): every document the plugin loads has the same nodes.
   const std::vector<EngineParam>& params() const { return params_; }
 
+  // ...........................................................................
   // [non-realtime] Prepares the graph for a sample rate and a block size.
   bool prepare(double sampleRate, uint32_t maxFrames);
 
+  // ...........................................................................
   // [non-realtime] Starts or stops rendering.
   bool setActive(bool active);
 
+  // ...........................................................................
   // [non-realtime] Loads a document saved by save(); false with `error`.
   bool load(const std::string& document, std::string* error);
 
+  // ...........................................................................
   // [non-realtime] The current state as a document.
   std::string save();
 
+  // ...........................................................................
   // [non-realtime] The current plain value of a parameter.
   float value(uint32_t id);
 
+  // ...........................................................................
   // [non-realtime] The output meter as the control thread last read it.
   EngineMeter meter() const;
 
+  // ...........................................................................
   // [realtime] Hands a parameter change to the control thread. `normalized`
   // is what the plugin host sent, for the probe.
   void pushParam(uint32_t id, float plain, double normalized, int32_t offset);
 
+  // ...........................................................................
   // [realtime] Renders one block into planar output channels.
   void render(float* const* outputs, uint32_t channels, uint32_t frames,
               bool offline);
 
+  // ...........................................................................
   // [offline rendering thread] Waits until the control thread has passed
   // on every change pushed so far, so that an offline block renders with
   // its changes, as playback does at the latest one block later. It may
   // block: offline rendering is not realtime.
   void waitForParams();
 
+  // ...........................................................................
   // [non-realtime] Runs `task` on the control thread and waits for it.
   void run(const std::function<void()>& task);
 
+  // ...........................................................................
   // The count of parameter changes the ring refused since the start.
   uint64_t droppedParams() const {
     return droppedParams_.load(std::memory_order_relaxed);
   }
 
+  // ...........................................................................
   // The count of changes the graph's queue refused at first (and the
   // control thread passed on again) since the start.
   uint64_t refusedParams() const {

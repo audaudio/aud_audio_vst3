@@ -63,7 +63,7 @@ constexpr double kSampleRate = 48000;
 constexpr UInt32 kBlockFrames = 128;
 constexpr int32 kMaxBlock = 4096;
 
-// ............................................................................
+// #############################################################################
 // Clock and log
 
 int64_t nowNs() {
@@ -124,42 +124,68 @@ uint64_t cpuOf(pid_t pid) {
   return (info.ri_user_time + info.ri_system_time) * timebase.numer / timebase.denom;
 }
 
-std::vector<pid_t> children() {
+// The children of `parent`, by default of this process.
+std::vector<pid_t> children(pid_t parent = getpid()) {
   std::vector<pid_t> pids(256);
-  const int count = proc_listchildpids(getpid(), pids.data(),
+  const int count = proc_listchildpids(parent, pids.data(),
                                        static_cast<int>(pids.size() * sizeof(pid_t)));
   pids.resize(count > 0 ? static_cast<size_t>(count) : 0);
   return pids;
 }
 
+// #############################################################################
+// The footprints of the children of a process.
+struct ChildFootprints {
+  // ...........................................................................
+  // The sum of the footprints in bytes.
+  uint64_t sum = 0;
+
+  // ...........................................................................
+  // The pid, the footprint and the CPU time of each child, as the items of
+  // a JSON list.
+  std::string list;
+};
+
+ChildFootprints childFootprints(pid_t parent) {
+  ChildFootprints result;
+  for (pid_t pid : children(parent)) {
+    const uint64_t bytes = footprintOf(pid);
+    result.sum += bytes;
+    if (!result.list.empty()) result.list += ",";
+    result.list += "{\"pid\":" + std::to_string(pid) +
+                   ",\"bytes\":" + std::to_string(bytes) +
+                   ",\"cpuNs\":" + std::to_string(cpuOf(pid)) + "}";
+  }
+  return result;
+}
+
 // Logs the footprint of this process and of every child.
 void logMemory(const char* label) {
   const uint64_t own = footprintOf(getpid());
-  uint64_t childSum = 0;
-  std::string list;
-  for (pid_t pid : children()) {
-    const uint64_t bytes = footprintOf(pid);
-    childSum += bytes;
-    if (!list.empty()) list += ",";
-    list += "{\"pid\":" + std::to_string(pid) +
-            ",\"bytes\":" + std::to_string(bytes) +
-            ",\"cpuNs\":" + std::to_string(cpuOf(pid)) + "}";
-  }
+  const ChildFootprints footprints = childFootprints(getpid());
   logRecord("memory", std::string("\"label\":\"") + label +
                           "\",\"host\":" + std::to_string(own) +
                           ",\"hostCpuNs\":" + std::to_string(cpuOf(getpid())) +
-                          ",\"children\":" + std::to_string(childSum) +
-                          ",\"total\":" + std::to_string(own + childSum) +
-                          ",\"childList\":[" + list + "]");
+                          ",\"children\":" + std::to_string(footprints.sum) +
+                          ",\"total\":" + std::to_string(own + footprints.sum) +
+                          ",\"childList\":[" + footprints.list + "]");
 }
 
-// ............................................................................
+// #############################################################################
 // Host objects
 
+// #############################################################################
+// The component handler of a plugin: performEdit hands the change to the
+// processor's next block, as in a DAW; the rest is taken as done.
 class ComponentHandler : public IComponentHandler {
  public:
+  // ...........................................................................
+  // Creates the handler of a plugin whose changes go to `transfer`.
   explicit ComponentHandler(ParameterChangeTransfer& transfer)
       : transfer_(transfer) {}
+
+  // ...........................................................................
+  // Destroys the handler.
   virtual ~ComponentHandler() = default;
 
   tresult PLUGIN_API beginEdit(ParamID) override { return kResultOk; }
@@ -185,10 +211,18 @@ class ComponentHandler : public IComponentHandler {
 
 struct Instance;
 
+// #############################################################################
+// The frame of a plugin's view: resizes the window of the instance.
 class PlugFrame : public IPlugFrame {
  public:
+  // ...........................................................................
+  // Creates the frame of the view of `instance`.
   explicit PlugFrame(Instance* instance) : instance_(instance) {}
+
+  // ...........................................................................
+  // Destroys the frame.
   virtual ~PlugFrame() = default;
+
   tresult PLUGIN_API resizeView(IPlugView* view, ViewRect* newSize) override;
   tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override {
     QUERY_INTERFACE(iid, obj, FUnknown::iid, IPlugFrame)
@@ -203,23 +237,45 @@ class PlugFrame : public IPlugFrame {
   Instance* instance_;
 };
 
+// #############################################################################
+// A plugin instance of the host.
 struct Instance {
+  // ...........................................................................
+  // The bundle, and the index of the instance among all of the host.
   std::string bundle;
   int index = 0;
+
+  // ...........................................................................
+  // The module, and the plugin's component, processor and controller.
   VST3::Hosting::Module::Ptr module;
   IPtr<PlugProvider> provider;
   IPtr<IComponent> component;
   IPtr<IAudioProcessor> processor;
   IPtr<IEditController> controller;
+
+  // ...........................................................................
+  // The data of a process call, and the parameter changes of the next.
   HostProcessData data;
   ParameterChanges inputChanges{64};
   ParameterChangeTransfer transfer{256};
+
+  // ...........................................................................
+  // The component handler, and the frame of the view.
   std::unique_ptr<ComponentHandler> handler;
   std::unique_ptr<PlugFrame> frame;
+
+  // ...........................................................................
+  // The open editor and its window.
   IPtr<IPlugView> view;
   NSWindow* window = nil;
+
+  // ...........................................................................
+  // What the plugin renders, per channel.
   std::vector<float> left;
   std::vector<float> right;
+
+  // ...........................................................................
+  // The test parameter and the cutoff; kNoParamId when the plugin has none.
   ParamID testParam = kNoParamId;
   ParamID cutoffParam = kNoParamId;
 };
@@ -242,7 +298,7 @@ std::atomic<uint64_t> overloads{0};
 // The device plays silence unless --audible: the plugins still render.
 bool audible = false;
 
-// ............................................................................
+// #############################################################################
 // Audio
 
 void processAll(UInt32 frames, float* outLeft, float* outRight) {
@@ -370,7 +426,7 @@ void startTimerAudio() {
   });
 }
 
-// ............................................................................
+// #############################################################################
 // Plugins
 
 ParamID findParam(IEditController* controller, const char* title) {
@@ -497,7 +553,7 @@ void automate(Instance& instance, ParamID id, double value) {
   instance.transfer.addChange(id, value, 0);
 }
 
-// ............................................................................
+// #############################################################################
 // The UI thread watchdog: how late the main queue runs a block.
 
 std::atomic<bool> watching{false};
@@ -530,15 +586,26 @@ void logStall(const char* label) {
                          ",\"overloads\":" + std::to_string(overloads.exchange(0)));
 }
 
-// ............................................................................
+// #############################################################################
 // Scenarios
 
+// #############################################################################
+// The options of the command line.
 struct Options {
+  // ...........................................................................
+  // The bundles, and the instances of each.
   std::vector<std::string> bundles;
   int instances = 1;
+
+  // ...........................................................................
+  // The scenario, its duration in seconds (0 for its own) and its cycles.
   std::string scenario = "open";
   double duration = 0;
   int cycles = 100;
+
+  // ...........................................................................
+  // Whether the device processes (false: a timer thread does), and whether
+  // it plays what the plugins render.
   bool audio = true;
   bool audible = false;
 };
@@ -744,31 +811,22 @@ Options parseOptions(int argc, const char* argv[]) {
 
 }  // namespace
 
+// #############################################################################
 // --measure <pid>: one JSON line with the footprint and the CPU time of a
 // process and of its children, for processes the host did not start
 // (REAPER, Live).
 int measure(pid_t pid) {
-  std::vector<pid_t> pids(256);
-  const int count = proc_listchildpids(pid, pids.data(),
-                                       static_cast<int>(pids.size() * sizeof(pid_t)));
-  pids.resize(count > 0 ? static_cast<size_t>(count) : 0);
-  std::string list;
-  uint64_t childSum = 0;
-  for (pid_t child : pids) {
-    const uint64_t bytes = footprintOf(child);
-    childSum += bytes;
-    if (!list.empty()) list += ",";
-    list += "{\"pid\":" + std::to_string(child) + ",\"bytes\":" + std::to_string(bytes) +
-            ",\"cpuNs\":" + std::to_string(cpuOf(child)) + "}";
-  }
+  const ChildFootprints footprints = childFootprints(pid);
   printf("{\"kind\":\"measure\",\"t\":%lld,\"pid\":%d,\"bytes\":%llu,\"cpuNs\":%llu,"
          "\"children\":%llu,\"childList\":[%s]}\n",
          static_cast<long long>(nowNs()), pid, static_cast<unsigned long long>(footprintOf(pid)),
-         static_cast<unsigned long long>(cpuOf(pid)), static_cast<unsigned long long>(childSum),
-         list.c_str());
+         static_cast<unsigned long long>(cpuOf(pid)),
+         static_cast<unsigned long long>(footprints.sum),
+         footprints.list.c_str());
   return 0;
 }
 
+// #############################################################################
 // --session: one JSON line on the display and the screen lock, for the
 // runs in a DAW (scripts/reaper.js): the editors draw no frames while the
 // display sleeps or the screen is locked.
@@ -786,6 +844,8 @@ int session() {
   return 0;
 }
 
+// #############################################################################
+// Runs a scenario, or measures a process, or reports the session.
 int main(int argc, const char* argv[]) {
   if (argc == 3 && std::string(argv[1]) == "--measure") return measure(std::stoi(argv[2]));
   if (argc == 2 && std::string(argv[1]) == "--session") return session();

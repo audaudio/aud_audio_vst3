@@ -14,8 +14,24 @@
 local config = dofile(os.getenv("AUD_REAPER_CONFIG"))
 local logFile = io.open(config.log, "a")
 
+-- The escapes of JSON for the characters a string must not hold as they
+-- are; any other control character becomes \u00XX.
+local jsonEscapes = {
+  ['"'] = '\\"', ['\\'] = '\\\\', ["\b"] = "\\b", ["\f"] = "\\f",
+  ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t",
+}
+
+-- `text` as a JSON string, quotes included: names from REAPER and the
+-- configuration may hold quotes, backslashes or control characters.
+local function jsonString(text)
+  local escaped = tostring(text):gsub('[%c"\\]', function(c)
+    return jsonEscapes[c] or string.format("\\u%04x", c:byte())
+  end)
+  return '"' .. escaped .. '"'
+end
+
 local function record(kind, fields)
-  logFile:write(string.format('{"kind":"%s","t":%.6f%s}\n', kind,
+  logFile:write(string.format('{"kind":%s,"t":%.6f%s}\n', jsonString(kind),
     reaper.time_precise(), fields or ""))
   logFile:flush()
 end
@@ -34,10 +50,10 @@ for _, plugin in ipairs(config.plugins) do
     reaper.SetMediaTrackInfo_Value(track, "I_PERFFLAGS", 2)
     local fx = reaper.TrackFX_AddByName(track, plugin, false, -1)
     if fx < 0 then
-      record("error", string.format(',"message":"plugin %s not found"', plugin))
+      record("error", ',"message":' .. jsonString("plugin " .. plugin .. " not found"))
     else
       local _, name = reaper.TrackFX_GetFXName(track, fx, "")
-      record("added", string.format(',"name":"%s"', name))
+      record("added", ',"name":' .. jsonString(name))
     end
     local slot = { track = track, fx = fx, plugin = plugin }
     for p = 0, reaper.TrackFX_GetNumParams(track, fx) - 1 do
@@ -163,7 +179,7 @@ reaper.SetEditCurPos(0, false, false)
 reaper.OnPlayButton()
 local start = reaper.time_precise()
 local next = 1
-record("start", string.format(',"scenario":"%s"', scenario))
+record("start", ',"scenario":' .. jsonString(scenario))
 
 local function quit()
   reaper.OnStopButton()

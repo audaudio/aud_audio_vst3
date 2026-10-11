@@ -47,6 +47,14 @@ const userResources = path.join(os.homedir(), 'Library', 'Application Support', 
 const work = path.join(root, '.dart_tool', 'reaper');
 const logDir = path.join(os.homedir(), 'Library', 'Logs', 'aud_audio_vst3');
 
+// The number an option names; anything else throws, so that a typo cannot
+// turn the run's time limit into NaN and end REAPER at once.
+function numberArg(name, value) {
+  const number = typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  if (!Number.isFinite(number)) throw new Error(`${name} takes a number, not ${value}`);
+  return number;
+}
+
 function parseArgs(argv) {
   const options = {
     plugins: [],
@@ -62,12 +70,12 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--plugin') options.plugins.push(argv[++i]);
     else if (arg === '--scenario') options.scenario = argv[++i];
-    else if (arg === '--instances') options.instances = Number(argv[++i]);
-    else if (arg === '--duration') options.duration = Number(argv[++i]);
-    else if (arg === '--cycles') options.cycles = Number(argv[++i]);
-    else if (arg === '--cpu-from') options.cpuFrom = Number(argv[++i]);
-    else if (arg === '--cpu-to') options.cpuTo = Number(argv[++i]);
-    else if (arg === '--idle') options.idle = Number(argv[++i]);
+    else if (arg === '--instances') options.instances = numberArg(arg, argv[++i]);
+    else if (arg === '--duration') options.duration = numberArg(arg, argv[++i]);
+    else if (arg === '--cycles') options.cycles = numberArg(arg, argv[++i]);
+    else if (arg === '--cpu-from') options.cpuFrom = numberArg(arg, argv[++i]);
+    else if (arg === '--cpu-to') options.cpuTo = numberArg(arg, argv[++i]);
+    else if (arg === '--idle') options.idle = numberArg(arg, argv[++i]);
     else throw new Error(`Unknown option ${arg}`);
   }
   if (options.plugins.length === 0) throw new Error('Name at least one --plugin');
@@ -195,21 +203,32 @@ function editors(pid) {
     .map((line) => Number(line.split(' ')[0]));
 }
 
+// The events of the run log. The log is read while spike.lua writes it: a
+// line that is no JSON, such as one written halfway, is left out instead
+// of ending the run.
 function readEvents(runLog) {
   if (!fs.existsSync(runLog)) return [];
   return fs
     .readFileSync(runLog, 'utf8')
     .split('\n')
     .filter(Boolean)
-    .map((line) => JSON.parse(line));
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
 }
 
 // The crash scenario, in seconds after the script started (spike.lua opens
 // and reopens the editors): kill the first editor process, then suspend
 // the one that replaced it for ten seconds.
 function crashStep(seconds, state, pid, runLog) {
-  const note = (kind, victim) =>
-    fs.appendFileSync(runLog, `{"kind":"${kind}","pid":${victim},"at":${seconds.toFixed(2)}}\n`);
+  const note = (kind, victim) => {
+    const at = Math.round(seconds * 100) / 100;
+    fs.appendFileSync(runLog, `${JSON.stringify({ kind, pid: victim, at })}\n`);
+  };
   if (seconds >= 4 && !state.killed) {
     state.killed = true;
     const victim = editors(pid)[0];

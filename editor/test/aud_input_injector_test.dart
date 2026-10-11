@@ -26,83 +26,98 @@ void main() {
       int time = 5000000,
     }) => AudShellInput(kind: kind, x: x, y: y, time: time);
 
-    test('adds the mouse before the first hover', () {
-      injector.handle(input(AudShellInputKind.enter));
-      injector.handle(input(AudShellInputKind.hover, x: 12));
-      expect(events.map((e) => e.runtimeType), [
-        PointerAddedEvent,
-        PointerHoverEvent,
-        PointerHoverEvent,
-      ]);
-      expect(events.last.viewId, 3);
-      expect(events.last.device, 1002);
-      expect(events.last.delta, const Offset(2, 0));
-      expect(events.last.timeStamp, const Duration(microseconds: 5000));
-      expect(injector.lastStamp, 5000000);
-    });
+    group('handle(input)', () {
+      test('adds the mouse of the instance before the first hover', () {
+        injector.handle(input(AudShellInputKind.enter));
+        injector.handle(input(AudShellInputKind.hover, x: 12));
+        expect(events.map((e) => e.runtimeType), [
+          PointerAddedEvent,
+          PointerHoverEvent,
+          PointerHoverEvent,
+        ]);
+        final last = events.last;
+        expect(
+          [last.viewId, last.device, last.delta, last.timeStamp],
+          [
+            3,
+            AudInputInjector.firstDevice + 2,
+            const Offset(2, 0),
+            const Duration(microseconds: 5000),
+          ],
+        );
+      });
 
-    test('plays a drag as down, move and up', () {
-      injector.handle(input(AudShellInputKind.down));
-      injector.handle(input(AudShellInputKind.move, y: 10));
-      injector.handle(input(AudShellInputKind.up, y: 10));
-      expect(events.map((e) => e.runtimeType), [
-        PointerAddedEvent,
-        PointerDownEvent,
-        PointerMoveEvent,
-        PointerUpEvent,
-      ]);
-      expect(events[1].buttons, kPrimaryButton);
-      expect(events[2].pointer, events[1].pointer);
-      expect(events[2].delta, const Offset(0, -10));
-    });
+      test('keeps the time stamp of the latest input', () {
+        expect(injector.lastStamp, 0);
+        injector.handle(input(AudShellInputKind.hover, time: 7000000));
+        expect(injector.lastStamp, 7000000);
+      });
 
-    test('turns a move without a button into a hover', () {
-      injector.handle(input(AudShellInputKind.move));
-      expect(events.last, isA<PointerHoverEvent>());
-    });
+      test('plays a drag as down, move and up', () {
+        injector.handle(input(AudShellInputKind.down));
+        injector.handle(input(AudShellInputKind.move, y: 10));
+        injector.handle(input(AudShellInputKind.up, y: 10));
+        expect(events.map((e) => e.runtimeType), [
+          PointerAddedEvent,
+          PointerDownEvent,
+          PointerMoveEvent,
+          PointerUpEvent,
+        ]);
+        expect(events[1].buttons, kPrimaryButton);
+        expect(events[2].pointer, events[1].pointer);
+        expect(events[2].delta, const Offset(0, -10));
+      });
 
-    test('ignores an up without a down', () {
-      injector.handle(input(AudShellInputKind.up));
-      expect(events, isEmpty);
-    });
+      test('turns a move without a button into a hover', () {
+        injector.handle(input(AudShellInputKind.move));
+        expect(events.last, isA<PointerHoverEvent>());
+      });
 
-    test('scrolls', () {
-      injector.handle(
-        const AudShellInput(kind: AudShellInputKind.scroll, dx: 1, dy: -40),
-      );
-      final scroll = events.last as PointerScrollEvent;
-      expect(scroll.scrollDelta, const Offset(1, -40));
-    });
+      test('ignores an up without a down', () {
+        injector.handle(input(AudShellInputKind.up));
+        expect(events, isEmpty);
+      });
 
-    test('removes the mouse on exit, unless a button is down', () {
-      injector.handle(input(AudShellInputKind.down));
-      injector.handle(input(AudShellInputKind.exit));
-      expect(events.last, isA<PointerDownEvent>());
-      injector.handle(input(AudShellInputKind.up));
-      injector.handle(input(AudShellInputKind.exit));
-      expect(events.last, isA<PointerRemovedEvent>());
-    });
+      test('scrolls', () {
+        injector.handle(
+          const AudShellInput(kind: AudShellInputKind.scroll, dx: 1, dy: -40),
+        );
+        final scroll = events.last as PointerScrollEvent;
+        expect(scroll.scrollDelta, const Offset(1, -40));
+      });
 
-    test('cancels a pointer that is still down', () {
-      injector.cancel();
-      expect(events, isEmpty);
-      injector.handle(input(AudShellInputKind.down));
-      injector.cancel();
-      expect(events.last, isA<PointerCancelEvent>());
-      expect(events.last.pointer, events[1].pointer);
-      injector.handle(input(AudShellInputKind.up));
-      expect(events.last, isA<PointerCancelEvent>());
-    });
+      test('removes the mouse on exit, unless a button is down', () {
+        injector.handle(input(AudShellInputKind.down));
+        injector.handle(input(AudShellInputKind.exit));
+        expect(events.last, isA<PointerDownEvent>());
+        injector.handle(input(AudShellInputKind.up));
+        injector.handle(input(AudShellInputKind.exit));
+        expect(events.last, isA<PointerRemovedEvent>());
+      });
 
-    test('forwards no keys', () {
       for (final kind in [
         AudShellInputKind.keyDown,
         AudShellInputKind.keyUp,
         AudShellInputKind.focus,
       ]) {
-        injector.handle(input(kind));
+        test('forwards no ${kind.name}', () {
+          injector.handle(input(kind));
+          expect(events, isEmpty);
+        });
       }
-      expect(events, isEmpty);
+    });
+
+    group('cancel()', () {
+      test('cancels a pointer that is still down', () {
+        injector.cancel();
+        expect(events, isEmpty);
+        injector.handle(input(AudShellInputKind.down));
+        injector.cancel();
+        expect(events.last, isA<PointerCancelEvent>());
+        expect(events.last.pointer, events[1].pointer);
+        injector.handle(input(AudShellInputKind.up));
+        expect(events.last, isA<PointerCancelEvent>());
+      });
     });
   });
 }

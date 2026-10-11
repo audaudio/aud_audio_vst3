@@ -17,9 +17,53 @@
 
 namespace aud_vst3 {
 
+namespace {
+
+// Whether a message of at least `size` bytes carries exactly one port
+// descriptor with a send right: what the editor sends with
+// MACH_MSG_TYPE_MAKE_SEND, COPY_SEND or MOVE_SEND arrives as PORT_SEND.
+bool carriesSendRight(const mach_msg_header_t& header, size_t size,
+                      const mach_msg_body_t& body,
+                      const mach_msg_port_descriptor_t& port) {
+  return (header.msgh_bits & MACH_MSGH_BITS_COMPLEX) != 0 &&
+         header.msgh_size >= size && body.msgh_descriptor_count == 1 &&
+         port.type == MACH_MSG_PORT_DESCRIPTOR &&
+         port.disposition == MACH_MSG_TYPE_PORT_SEND;
+}
+
+// Whether a received message is what its id promises. Every process that
+// finds the port's name can send to it: a message taken by its id alone
+// would make the plugin keep or deallocate a port name of the sender's
+// choice. The editor sends no reply port, so a valid message carries no
+// right besides the one of its descriptor.
+bool wellFormed(const AudMachBuffer& buffer) {
+  const mach_msg_header_t& header = buffer.frame.header;
+  if (MACH_MSGH_BITS_REMOTE(header.msgh_bits) != 0) return false;
+  switch (header.msgh_id) {
+    case AUD_MACH_HELLO:
+      return carriesSendRight(header, sizeof(AudMachHello), buffer.hello.body,
+                              buffer.hello.port);
+    case AUD_MACH_SURFACE:
+      return carriesSendRight(header, sizeof(AudMachSurface),
+                              buffer.surface.body, buffer.surface.port);
+    case AUD_MACH_FRAME:
+      return (header.msgh_bits & MACH_MSGH_BITS_COMPLEX) == 0 &&
+             header.msgh_size >= sizeof(AudMachFrame);
+    default:
+      return false;
+  }
+}
+
+}  // namespace
+
+// #############################################################################
+// SurfaceChannel
+
+// .............................................................................
 SurfaceChannel::SurfaceChannel(FrameHandler onFrame)
     : onFrame_(std::move(onFrame)) {}
 
+// .............................................................................
 SurfaceChannel::~SurfaceChannel() {
   if (source_ != nullptr) {
     // The cancel handler destroys the receive right: libdispatch allows it
@@ -36,6 +80,7 @@ SurfaceChannel::~SurfaceChannel() {
   reset();
 }
 
+// .............................................................................
 bool SurfaceChannel::start() {
   char name[128];
   std::snprintf(name, sizeof(name), "io.audaudio.vst3.%d.%08x%08x", getpid(),
@@ -75,6 +120,11 @@ void SurfaceChannel::receive() {
   mach_msg_header_t* header = &buffer.frame.header;
   if (mach_msg(header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(buffer),
                port_, 0, MACH_PORT_NULL) != KERN_SUCCESS) {
+    return;
+  }
+  if (!wellFormed(buffer)) {
+    // Goes with every right it carries.
+    mach_msg_destroy(header);
     return;
   }
   switch (header->msgh_id) {
@@ -137,12 +187,10 @@ void SurfaceChannel::receive() {
       });
       return;
     }
-    default:
-      mach_msg_destroy(header);
-      return;
   }
 }
 
+// .............................................................................
 void SurfaceChannel::release(uint32_t instance, uint32_t index,
                              uint32_t generation) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -187,6 +235,7 @@ void SurfaceChannel::clear(Pool& pool) {
   }
 }
 
+// .............................................................................
 void SurfaceChannel::drop(uint32_t instance) {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = pools_.find(instance);
@@ -195,6 +244,7 @@ void SurfaceChannel::drop(uint32_t instance) {
   pools_.erase(it);
 }
 
+// .............................................................................
 void SurfaceChannel::reset() {
   std::lock_guard<std::mutex> lock(mutex_);
   pending_.clear();

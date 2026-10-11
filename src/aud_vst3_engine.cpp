@@ -23,6 +23,10 @@ constexpr int64_t kIdleWaitNs = 10'000'000;
 // How long an offline block waits for the control thread at most.
 constexpr int64_t kOfflineWaitNs = 100'000'000;
 
+// How long an offline block waits for one pass of the control thread
+// before it wakes the thread again.
+constexpr int64_t kOfflinePassNs = 2'000'000;
+
 float clamp(const EngineParam& param, float value) {
   return std::min(param.max, std::max(param.min, value));
 }
@@ -31,6 +35,10 @@ float finite(float value) { return std::isfinite(value) ? value : 0.0f; }
 
 }  // namespace
 
+// #############################################################################
+// Engine
+
+// .............................................................................
 Engine::Engine(Probe& probe)
     : probe_(probe),
       changes_(1024),
@@ -39,6 +47,7 @@ Engine::Engine(Probe& probe)
   thread_ = std::thread([this] { loop(); });
 }
 
+// .............................................................................
 Engine::~Engine() {
   // No realtime call is in flight: Plugin::terminate waits for process().
   rtHost_.store(nullptr, std::memory_order_relaxed);
@@ -79,6 +88,7 @@ Engine::~Engine() {
   }
 }
 
+// .............................................................................
 bool Engine::open(const std::string& document, double sampleRate,
                   uint32_t maxFrames, std::string* error) {
   bool ok = false;
@@ -107,6 +117,7 @@ bool Engine::open(const std::string& document, double sampleRate,
   return ok;
 }
 
+// .............................................................................
 bool Engine::prepare(double sampleRate, uint32_t maxFrames) {
   bool ok = false;
   run([&] {
@@ -119,6 +130,7 @@ bool Engine::prepare(double sampleRate, uint32_t maxFrames) {
   return ok;
 }
 
+// .............................................................................
 bool Engine::setActive(bool active) {
   bool ok = false;
   run([&] {
@@ -133,6 +145,7 @@ bool Engine::setActive(bool active) {
   return ok;
 }
 
+// .............................................................................
 bool Engine::load(const std::string& document, std::string* error) {
   bool ok = false;
   run([&] {
@@ -143,6 +156,7 @@ bool Engine::load(const std::string& document, std::string* error) {
   return ok;
 }
 
+// .............................................................................
 std::string Engine::save() {
   std::string text;
   run([&] {
@@ -162,6 +176,7 @@ std::string Engine::save() {
   return text;
 }
 
+// .............................................................................
 float Engine::value(uint32_t id) {
   float result = 0;
   run([&] {
@@ -175,11 +190,13 @@ float Engine::value(uint32_t id) {
   return result;
 }
 
+// .............................................................................
 EngineMeter Engine::meter() const {
   return {meterPeak_.load(std::memory_order_relaxed),
           meterRms_.load(std::memory_order_relaxed)};
 }
 
+// .............................................................................
 void Engine::pushParam(uint32_t id, float plain, double normalized,
                        int32_t offset) {
   if (changes_.push({id, plain})) {
@@ -191,15 +208,18 @@ void Engine::pushParam(uint32_t id, float plain, double normalized,
   dispatch_semaphore_signal(wake_);
 }
 
+// .............................................................................
 void Engine::waitForParams() {
   const uint64_t target = pushed_.load(std::memory_order_acquire);
   const int64_t deadline = nowNs() + kOfflineWaitNs;
   while (taken_.load(std::memory_order_acquire) < target && nowNs() < deadline) {
     dispatch_semaphore_signal(wake_);
-    dispatch_semaphore_wait(drained_, dispatch_time(DISPATCH_TIME_NOW, 2'000'000));
+    dispatch_semaphore_wait(drained_,
+                            dispatch_time(DISPATCH_TIME_NOW, kOfflinePassNs));
   }
 }
 
+// .............................................................................
 void Engine::render(float* const* outputs, uint32_t channels, uint32_t frames,
                     bool offline) {
   AudHost* host = rtHost_.load(std::memory_order_acquire);
@@ -230,6 +250,7 @@ void Engine::render(float* const* outputs, uint32_t channels, uint32_t frames,
   }
 }
 
+// .............................................................................
 void Engine::run(const std::function<void()>& task) {
   if (std::this_thread::get_id() == thread_.get_id()) {
     task();

@@ -22,17 +22,31 @@
 
 namespace aud_vst3 {
 
+// #############################################################################
+// The synthetic drag in one view, driven by a timer on the host's UI thread.
 class SyntheticDrag {
  public:
+  // ...........................................................................
+  // Creates a drag that does not run yet.
   SyntheticDrag() = default;
+
+  // ...........................................................................
+  // Stops the drag.
   ~SyntheticDrag();
 
+  // ...........................................................................
   // Starts the drag in `view`: `prepare` runs first and sets the knob to
   // kTestStartValue, the mouse down follows half a second later; `done`
   // runs after the mouse up.
   void start(NSView* view, ViewDelegate* delegate,
              const std::function<void()>& prepare, std::function<void()> done);
+
+  // ...........................................................................
+  // Stops the drag where it is; `done` does not run.
   void stop();
+
+  // ...........................................................................
+  // Whether the drag runs.
   bool running() const { return timer_ != nil; }
 
  private:

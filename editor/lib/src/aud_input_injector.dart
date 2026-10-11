@@ -16,7 +16,7 @@ class AudInputInjector {
   // ...........................................................................
   /// Creates the injector; [dispatch] hands an event to the framework.
   AudInputInjector({required this.dispatch, this.viewId = 0, int instance = 0})
-    : device = 1000 + instance;
+    : device = firstDevice + instance;
 
   // ...........................................................................
   /// Hands an event to the framework, e.g.
@@ -33,8 +33,14 @@ class AudInputInjector {
 
   // ...........................................................................
   /// The time stamp of the latest input event, mach time in nanoseconds.
-  int lastStamp = 0;
+  int get lastStamp => _lastStamp;
 
+  // ...........................................................................
+  /// The device id of the forwarded mouse of plugin instance 0; instance n
+  /// gets `firstDevice + n`, apart from the ids of the editor's own devices.
+  static const int firstDevice = 1000;
+
+  int _lastStamp = 0;
   bool _added = false;
   bool _down = false;
   int _pointer = 0;
@@ -43,7 +49,7 @@ class AudInputInjector {
   // ...........................................................................
   /// Injects [input].
   void handle(AudShellInput input) {
-    lastStamp = input.time;
+    _lastStamp = input.time;
     final position = Offset(input.x, input.y);
     final timeStamp = Duration(microseconds: input.time ~/ 1000);
     switch (input.kind) {
@@ -156,7 +162,7 @@ class AudInputInjector {
     _down = false;
     dispatch(
       PointerCancelEvent(
-        timeStamp: Duration(microseconds: lastStamp ~/ 1000),
+        timeStamp: Duration(microseconds: _lastStamp ~/ 1000),
         pointer: _pointer,
         viewId: viewId,
         kind: PointerDeviceKind.mouse,

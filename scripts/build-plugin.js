@@ -75,6 +75,7 @@ const variantSources = {
     'src/aud_vst3_driver.mm',
     'src/aud_vst3_objc.mm',
     'src/aud_vst3_remote_view.mm',
+    'src/aud_vst3_shell.cpp',
     'src/aud_vst3_socket.cpp',
     'src/aud_vst3_surfaces.mm',
   ],
@@ -82,11 +83,13 @@ const variantSources = {
     'src/aud_vst3_driver.mm',
     'src/aud_vst3_objc.mm',
     'src/aud_vst3_flutter_view.mm',
+    'src/aud_vst3_shell.cpp',
   ],
   S: [
     'src/aud_vst3_driver.mm',
     'src/aud_vst3_objc.mm',
     'src/aud_vst3_remote_view.mm',
+    'src/aud_vst3_shell.cpp',
     'src/aud_vst3_socket.cpp',
     'src/aud_vst3_surfaces.mm',
   ],
@@ -94,6 +97,7 @@ const variantSources = {
     'src/aud_vst3_driver.mm',
     'src/aud_vst3_objc.mm',
     'src/aud_vst3_remote_view.mm',
+    'src/aud_vst3_shell.cpp',
     'src/aud_vst3_socket.cpp',
     'src/aud_vst3_surfaces.mm',
   ],
@@ -106,6 +110,9 @@ const variantSources = {
 };
 
 const frameworks = ['Cocoa', 'CoreAudio', 'CoreGraphics', 'IOSurface', 'QuartzCore'];
+
+// The machine every object and binary is built for.
+const targetFlags = ['-arch', 'arm64', '-mmacosx-version-min=12.0'];
 
 function parseArgs(argv) {
   const options = {
@@ -206,6 +213,15 @@ function readList(file) {
     .filter(Boolean);
 }
 
+// The sources of the vendored SDK subset. vstsinglecomponenteffect.cpp
+// compiles vsteditcontroller.cpp itself, with the controller's setState and
+// getState renamed.
+function sdkSources() {
+  return readList(path.join(sdkDir, 'SOURCES.txt'))
+    .filter((file) => file !== 'public.sdk/source/vst/vsteditcontroller.cpp')
+    .map((file) => path.join(sdkDir, file));
+}
+
 function hashOf(parts) {
   const hash = createHash('sha256');
   for (const part of parts) hash.update(part).update('\0');
@@ -227,9 +243,7 @@ function compilerOf(options) {
 
 function flagsOf(options, variant, dirs, prefix) {
   const flags = [
-    '-arch',
-    'arm64',
-    '-mmacosx-version-min=12.0',
+    ...targetFlags,
     '-O2',
     '-g',
     '-DRELEASE=1',
@@ -376,6 +390,16 @@ function flutterPrefix(bundleName) {
 // and Swift module names, the install name - and in its Info.plist
 // replaced by the prefix.
 function embedInProcessFlutter(bundle, editorApp, prefix) {
+  // The rename replaces bytes in place: a prefix of another length - a
+  // .prefix file edited by hand - would shift and break the binary.
+  const from = Buffer.from('Flutter');
+  const to = Buffer.from(prefix);
+  if (to.length !== from.length) {
+    throw new Error(
+      `The Flutter prefix "${prefix}" must have ${from.length} bytes: ` +
+        `delete its .prefix file in ${buildDir}`,
+    );
+  }
   const frameworks = path.join(bundle, 'Contents', 'Frameworks');
   fs.mkdirSync(frameworks, { recursive: true });
   const source = path.join(editorApp, 'Contents', 'Frameworks');
@@ -388,14 +412,14 @@ function embedInProcessFlutter(bundle, editorApp, prefix) {
   run('ditto', [path.join(original, 'Resources'), path.join(version, 'Resources')]);
   const thin = path.join(version, name);
   run('lipo', [path.join(original, 'FlutterMacOS'), '-thin', 'arm64', '-output', thin]);
-  const from = Buffer.from('Flutter');
-  const to = Buffer.from(prefix);
   for (const file of [thin, path.join(version, 'Resources', 'Info.plist')]) {
     const bytes = fs.readFileSync(file);
     let count = 0;
-    for (let i = bytes.indexOf(from); i >= 0; i = bytes.indexOf(from, i + 7)) {
+    let i = bytes.indexOf(from);
+    while (i >= 0) {
       to.copy(bytes, i);
       count += 1;
+      i = bytes.indexOf(from, i + from.length);
     }
     fs.writeFileSync(file, bytes);
     if (file === thin) console.log(`Renamed ${count} occurrences of Flutter to ${prefix}`);
@@ -455,11 +479,6 @@ async function buildVariant(options, variant, editorApp) {
     .readdirSync(dirs.graph)
     .filter((file) => file.endsWith('.cpp'))
     .map((file) => path.join(dirs.graph, file));
-  // vstsinglecomponenteffect.cpp compiles vsteditcontroller.cpp itself, with
-  // the controller's setState and getState renamed.
-  const sdkSources = readList(path.join(sdkDir, 'SOURCES.txt'))
-    .filter((file) => file !== 'public.sdk/source/vst/vsteditcontroller.cpp')
-    .map((file) => path.join(sdkDir, file));
   const own = [...pluginSources, ...variantSources[variant]].map((file) =>
     path.join(root, file),
   );
@@ -469,7 +488,7 @@ async function buildVariant(options, variant, editorApp) {
   const objects = await compileAll(
     compiler,
     flags,
-    [...sdkSources, ...graphSources, ...own],
+    [...sdkSources(), ...graphSources, ...own],
     path.join(buildDir, config),
     headersHash([sdkDir, dirs.graph, dirs.core, path.join(root, 'src')]),
   );
@@ -489,9 +508,7 @@ async function buildVariant(options, variant, editorApp) {
     path.join(resources, 'VST3SDK-LICENSE.txt'),
   );
   const linkArgs = [
-    '-arch',
-    'arm64',
-    '-mmacosx-version-min=12.0',
+    ...targetFlags,
     '-bundle',
     '-o',
     path.join(macos, name),
@@ -548,7 +565,26 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+// The compile settings, for scripts/test-native.js.
+module.exports = {
+  root,
+  sdkDir,
+  buildDir,
+  frameworks,
+  targetFlags,
+  run,
+  engineDirs,
+  sdkSources,
+  hashOf,
+  compilerOf,
+  flagsOf,
+  headersHash,
+  compileAll,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}

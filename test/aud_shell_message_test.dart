@@ -22,198 +22,285 @@ void main() {
     defaultValue: 1000,
     value: 1200,
     logarithmic: true,
-    steps: 0,
   );
+  const paramJson = {
+    'id': 7,
+    'nodeId': 'filter',
+    'paramId': 'cutoff',
+    'node': 2,
+    'index': 0,
+    'name': 'Cutoff',
+    'unit': 'Hz',
+    'min': 20,
+    'max': 20000,
+    'default': 1000,
+    'value': 1200,
+    'logarithmic': true,
+    'steps': 0,
+  };
+  const setParam = AudSetParamCommand(node: 2, paramIndex: 0, value: 440);
 
-  // Every message through JSON and back.
-  final messages = <AudShellMessage>[
-    const AudShellHello(token: 'abc', instance: 1, pid: 42),
-    const AudShellWelcome(
-      instance: 1,
-      name: 'spike',
-      params: [param],
-      width: 620,
-      height: 220,
-      scale: 2,
+  // Every message with the JSON the plugin's C++ side reads and writes.
+  final cases = <(AudShellMessage, Map<String, Object?>)>[
+    (
+      const AudShellHello(token: 'abc', instance: 1, pid: 42),
+      {
+        'type': 'hello',
+        'instance': 1,
+        'token': 'abc',
+        'pid': 42,
+        'version': audShellProtocolVersion,
+      },
     ),
-    const AudShellCommand(
-      AudSetParamCommand(node: 2, paramIndex: 0, value: 440),
-      input: 99,
-      instance: 4,
+    (
+      const AudShellWelcome(
+        instance: 1,
+        name: 'spike',
+        params: [param],
+        width: 620,
+        height: 220,
+        scale: 2,
+      ),
+      {
+        'type': 'welcome',
+        'instance': 1,
+        'name': 'spike',
+        'params': [paramJson],
+        'width': 620,
+        'height': 220,
+        'scale': 2,
+        'version': audShellProtocolVersion,
+      },
     ),
-    const AudShellGesture(
-      node: 2,
-      paramIndex: 0,
-      phase: AudShellGesturePhase.begin,
+    (
+      const AudShellCommand(setParam, input: 99, instance: 4),
+      {
+        'type': 'command',
+        'instance': 4,
+        'command': setParam.toJson(),
+        'input': 99,
+      },
     ),
-    const AudShellParamValue(id: 7, value: 1500, sequence: 3),
-    const AudShellMeter(peak: 0.5, rms: 0.25),
-    const AudShellInput(
-      kind: AudShellInputKind.scroll,
-      x: 1,
-      y: 2,
-      buttons: 1,
-      dx: 3,
-      dy: 4,
-      keyCode: 5,
-      characters: 't',
-      modifiers: 6,
-      focused: true,
-      time: 7,
+    (
+      const AudShellGesture(
+        node: 2,
+        paramIndex: 0,
+        phase: AudShellGesturePhase.begin,
+      ),
+      {
+        'type': 'gesture',
+        'instance': 0,
+        'node': 2,
+        'paramIndex': 0,
+        'phase': 'begin',
+      },
     ),
-    const AudShellPlace(
-      x: 10,
-      y: 20,
-      width: 700,
-      height: 300,
-      scale: 1,
-      window: 5,
-      visible: false,
+    (
+      const AudShellParamValue(id: 7, value: 1500, sequence: 3),
+      {'type': 'param', 'instance': 0, 'id': 7, 'value': 1500, 'seq': 3},
     ),
-    const AudShellCursor('resizeUpDown'),
-    const AudShellProbe('paramApplied', {'seq': 3, 't': 10}),
-    const AudShellShow(instance: 2),
-    const AudShellHide(instance: 2),
-    const AudShellRemove(instance: 2),
-    const AudShellClose(),
+    (
+      const AudShellMeter(peak: 0.5, rms: 0.25),
+      {'type': 'meter', 'instance': 0, 'peak': 0.5, 'rms': 0.25},
+    ),
+    (
+      const AudShellInput(
+        kind: AudShellInputKind.scroll,
+        x: 1,
+        y: 2,
+        buttons: 1,
+        dx: 3,
+        dy: 4,
+        keyCode: 5,
+        characters: 't',
+        modifiers: 6,
+        focused: true,
+        time: 7,
+      ),
+      {
+        'type': 'input',
+        'instance': 0,
+        'kind': 'scroll',
+        'x': 1,
+        'y': 2,
+        'buttons': 1,
+        'dx': 3,
+        'dy': 4,
+        'keyCode': 5,
+        'characters': 't',
+        'modifiers': 6,
+        'focused': true,
+        't': 7,
+      },
+    ),
+    (
+      const AudShellPlace(
+        x: 10,
+        y: 20,
+        width: 700,
+        height: 300,
+        scale: 1,
+        window: 5,
+        visible: false,
+      ),
+      {
+        'type': 'place',
+        'instance': 0,
+        'x': 10,
+        'y': 20,
+        'width': 700,
+        'height': 300,
+        'scale': 1,
+        'window': 5,
+        'visible': false,
+      },
+    ),
+    (
+      const AudShellCursor('resizeUpDown'),
+      {'type': 'cursor', 'instance': 0, 'kind': 'resizeUpDown'},
+    ),
+    (
+      const AudShellProbe('paramApplied', {'seq': 3, 't': 10}),
+      {
+        'type': 'probe',
+        'instance': 0,
+        'kind': 'paramApplied',
+        'fields': {'seq': 3, 't': 10},
+      },
+    ),
+    (const AudShellShow(instance: 2), {'type': 'show', 'instance': 2}),
+    (const AudShellHide(instance: 2), {'type': 'hide', 'instance': 2}),
+    (const AudShellRemove(instance: 2), {'type': 'remove', 'instance': 2}),
+    (const AudShellClose(), {'type': 'close'}),
   ];
 
   group('AudShellMessage', () {
-    test('reads what it writes', () {
-      for (final message in messages) {
-        final copy = AudShellMessage.fromJson(message.toJson());
-        expect(copy.runtimeType, message.runtimeType);
-        expect(copy.toJson(), message.toJson());
+    group('toJson()', () {
+      for (final (message, json) in cases) {
+        test('writes every field of ${message.runtimeType}', () {
+          expect(message.toJson(), json);
+        });
       }
     });
 
-    test('keeps the instance', () {
-      for (final message in messages) {
+    group('fromJson(json)', () {
+      for (final (message, json) in cases) {
+        test('reads ${message.runtimeType} with its instance', () {
+          final copy = AudShellMessage.fromJson(json);
+          expect(copy.runtimeType, message.runtimeType);
+          expect(copy.instance, message.instance);
+          expect(copy.toJson(), json);
+        });
+      }
+
+      test('takes instance 0 when the JSON names none', () {
+        expect(AudShellMessage.fromJson({'type': 'show'}).instance, 0);
+      });
+
+      test('refuses an unknown type', () {
         expect(
-          AudShellMessage.fromJson(message.toJson()).instance,
-          message.instance,
+          () => AudShellMessage.fromJson({'type': 'nonsense'}),
+          throwsA(
+            isA<FormatException>()
+                .having((e) => e.message, 'message', 'Unknown shell message')
+                .having((e) => e.source, 'source', {'type': 'nonsense'}),
+          ),
         );
-      }
-      expect(AudShellMessage.fromJson({'type': 'show'}).instance, 0);
+      });
     });
 
-    test('refuses an unknown type', () {
-      expect(
-        () => AudShellMessage.fromJson({'type': 'nonsense'}),
-        throwsA(isA<FormatException>()),
-      );
-    });
-
-    test('describes itself', () {
-      expect(const AudShellClose().toString(), 'AudShellClose({type: close})');
+    group('toString()', () {
+      test('names the type and the JSON', () {
+        expect(
+          const AudShellClose().toString(),
+          'AudShellClose({type: close})',
+        );
+      });
     });
   });
 
-  group('AudShellParam', () {
-    test('takes defaults for optional fields', () {
-      final json = param.toJson()
+  group('AudShellParam.fromJson(json)', () {
+    test('defaults logarithmic to false and steps to 0', () {
+      final json = {...paramJson}
         ..remove('logarithmic')
         ..remove('steps');
-      final copy = AudShellParam.fromJson(json);
-      expect(copy.logarithmic, isFalse);
-      expect(copy.steps, 0);
-      expect(copy.nodeId, 'filter');
-      expect(copy.paramId, 'cutoff');
-      expect(copy.node, 2);
-      expect(copy.index, 0);
-      expect(copy.name, 'Cutoff');
-      expect(copy.unit, 'Hz');
-      expect(copy.min, 20);
-      expect(copy.max, 20000);
-      expect(copy.defaultValue, 1000);
-      expect(copy.value, 1200);
-      expect(copy.id, 7);
+      expect(AudShellParam.fromJson(json).toJson(), {
+        ...json,
+        'logarithmic': false,
+        'steps': 0,
+      });
     });
   });
 
-  group('AudShellCommand', () {
+  group('AudShellCommand.fromJson(json)', () {
     test('defaults the input stamp to 0', () {
-      final json = messages[2].toJson()..remove('input');
-      expect((AudShellMessage.fromJson(json) as AudShellCommand).input, 0);
+      final copy = AudShellCommand.fromJson({
+        'type': 'command',
+        'command': setParam.toJson(),
+      });
+      expect(copy.toJson(), {
+        'type': 'command',
+        'instance': 0,
+        'command': setParam.toJson(),
+        'input': 0,
+      });
     });
   });
 
-  group('AudShellParamValue', () {
+  group('AudShellParamValue.fromJson(json)', () {
     test('defaults the sequence to 0', () {
-      final copy =
-          AudShellMessage.fromJson({'type': 'param', 'id': 1, 'value': 2})
-              as AudShellParamValue;
-      expect(copy.sequence, 0);
-      expect(copy.id, 1);
-      expect(copy.value, 2);
+      final copy = AudShellParamValue.fromJson({'id': 1, 'value': 2});
+      expect(copy.toJson(), {
+        'type': 'param',
+        'instance': 0,
+        'id': 1,
+        'value': 2,
+        'seq': 0,
+      });
     });
   });
 
-  group('AudShellInput', () {
-    test('defaults missing fields', () {
-      final copy =
-          AudShellMessage.fromJson({'type': 'input', 'kind': 'hover'})
-              as AudShellInput;
-      expect(copy.kind, AudShellInputKind.hover);
-      expect(copy.x, 0);
-      expect(copy.y, 0);
-      expect(copy.buttons, 0);
-      expect(copy.dx, 0);
-      expect(copy.dy, 0);
-      expect(copy.keyCode, 0);
-      expect(copy.characters, '');
-      expect(copy.modifiers, 0);
-      expect(copy.focused, isFalse);
-      expect(copy.time, 0);
+  group('AudShellInput.fromJson(json)', () {
+    test('defaults every field but the kind', () {
+      final copy = AudShellInput.fromJson({'kind': 'hover'});
+      expect(copy.toJson(), {
+        'type': 'input',
+        'instance': 0,
+        'kind': 'hover',
+        'x': 0,
+        'y': 0,
+        'buttons': 0,
+        'dx': 0,
+        'dy': 0,
+        'keyCode': 0,
+        'characters': '',
+        'modifiers': 0,
+        'focused': false,
+        't': 0,
+      });
     });
   });
 
-  group('fields', () {
-    test('are kept', () {
-      const hello = AudShellHello(token: 't', instance: 2, pid: 3);
-      expect(hello.version, audShellProtocolVersion);
-      expect(hello.token, 't');
-      expect(hello.instance, 2);
-      expect(hello.pid, 3);
-      final welcome = messages[1] as AudShellWelcome;
-      expect(welcome.instance, 1);
-      expect(welcome.name, 'spike');
-      expect(welcome.params.single.id, 7);
-      expect(welcome.width, 620);
-      expect(welcome.height, 220);
-      expect(welcome.scale, 2);
-      expect(welcome.version, audShellProtocolVersion);
-      final gesture = messages[3] as AudShellGesture;
-      expect(gesture.node, 2);
-      expect(gesture.paramIndex, 0);
-      expect(gesture.phase, AudShellGesturePhase.begin);
-      final meter = messages[5] as AudShellMeter;
-      expect(meter.peak, 0.5);
-      expect(meter.rms, 0.25);
-      final place = messages[7] as AudShellPlace;
-      expect(place.x, 10);
-      expect(place.y, 20);
-      expect(place.width, 700);
-      expect(place.height, 300);
-      expect(place.scale, 1);
-      expect(place.window, 5);
-      expect(place.visible, isFalse);
-      final defaults = AudShellPlace.fromJson({
+  group('AudShellPlace.fromJson(json)', () {
+    test('defaults the window to 0 and the view to visible', () {
+      final copy = AudShellPlace.fromJson({
         'x': 0,
         'y': 0,
         'width': 1,
         'height': 1,
         'scale': 2,
       });
-      expect(defaults.window, 0);
-      expect(defaults.visible, isTrue);
-      expect((messages[8] as AudShellCursor).kind, 'resizeUpDown');
-      final probe = messages[9] as AudShellProbe;
-      expect(probe.kind, 'paramApplied');
-      expect(probe.fields, {'seq': 3, 't': 10});
-      final command = messages[2] as AudShellCommand;
-      expect(command.command, isA<AudSetParamCommand>());
-      expect(command.input, 99);
+      expect(copy.toJson(), {
+        'type': 'place',
+        'instance': 0,
+        'x': 0,
+        'y': 0,
+        'width': 1,
+        'height': 1,
+        'scale': 2,
+        'window': 0,
+        'visible': true,
+      });
     });
   });
 }

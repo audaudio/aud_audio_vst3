@@ -15,26 +15,26 @@
 #include <string>
 #include <vector>
 
+#include "aud_audio_graph.h"
+#include "public.sdk/source/common/pluginview.h"
+
 #include "aud_vst3_driver.hpp"
 #include "aud_vst3_layout.hpp"
 #include "aud_vst3_objc.hpp"
 #include "aud_vst3_plugin.hpp"
-#include "public.sdk/source/common/pluginview.h"
 
 namespace aud_vst3 {
 
 using namespace Steinberg;
 
-namespace {
-
-int64_t stampOf(NSEvent* event) {
-  return static_cast<int64_t>(event.timestamp * 1e9);
-}
-
-}  // namespace
-
+// #############################################################################
+// The plugin's view of variant C: the knobs and the meter, drawn with Core
+// Graphics on the host's UI thread.
 class NativeView : public CPluginView, public ViewDelegate, public ParamObserver {
  public:
+  // ...........................................................................
+  // Creates the view of `plugin`, which it holds and observes; the knobs
+  // start at the plugin's values.
   explicit NativeView(Plugin* plugin)
       : CPluginView(nullptr), plugin_(plugin) {
     ViewRect size(0, 0, static_cast<int32>(kEditorWidth),
@@ -43,12 +43,7 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
     for (int i = 0; i < kKnobCount; ++i) {
       Knob knob;
       knob.label = kKnobs[i].label;
-      for (const EngineParam& param : plugin_->params()) {
-        if (param.nodeId == kKnobs[i].nodeId &&
-            param.paramId == kKnobs[i].paramId) {
-          knob.id = param.id;
-        }
-      }
+      knob.id = aud_host_param_id(kKnobs[i].nodeId, kKnobs[i].paramId);
       knob.value = plugin_->normalized(knob.id);
       knobs_.push_back(knob);
     }
@@ -58,11 +53,16 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
     plugin_->addObserver(this);
   }
 
+  // ...........................................................................
+  // Tears the view down and lets the plugin go.
   ~NativeView() override {
     plugin_->removeObserver(this);
     teardown();
     plugin_->release();
   }
+
+  // ###########################################################################
+  // IPlugView
 
   tresult PLUGIN_API isPlatformTypeSupported(FIDString type) SMTG_OVERRIDE {
     return std::strcmp(type, kPlatformTypeNSView) == 0 ? kResultTrue
@@ -76,7 +76,7 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
     view_ = makeView(this, NSMakeRect(0, 0, rect.getWidth(), rect.getHeight()));
     [parentView addSubview:view_];
     NativeView* self = this;
-    meterTimer_ = [NSTimer timerWithTimeInterval:1.0 / 30
+    meterTimer_ = [NSTimer timerWithTimeInterval:kMeterPeriod
                                          repeats:YES
                                            block:^(NSTimer*) {
                                              self->meterTick();
@@ -121,12 +121,15 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
     return kResultTrue;
   }
 
+  // ###########################################################################
   // ViewDelegate
 
   void drawRect(NSView* view, NSRect) override {
     CGContextRef ctx = [NSGraphicsContext currentContext].CGContext;
     const NSRect bounds = view.bounds;
-    CGContextSetRGBFillColor(ctx, 0.11, 0.12, 0.14, 1);
+    CGContextSetRGBFillColor(ctx, kEditorBackground.red,
+                             kEditorBackground.green, kEditorBackground.blue,
+                             1);
     CGContextFillRect(ctx, bounds);
     NSDictionary* labelAttrs = @{
       NSFontAttributeName : [NSFont systemFontOfSize:12],
@@ -263,6 +266,7 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
     }
   }
 
+  // ###########################################################################
   // ParamObserver
 
   void paramChanged(uint32_t id, double normalized) override {
@@ -291,6 +295,9 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
         },
         [self] { self->plugin_->probe().write("testEnd", "\"variant\":\"C\""); });
   }
+
+  // ###########################################################################
+  // FUnknown
 
   OBJ_METHODS(NativeView, CPluginView)
   REFCOUNT_METHODS(CPluginView)
@@ -351,6 +358,7 @@ class NativeView : public CPluginView, public ViewDelegate, public ParamObserver
   SyntheticDrag drag_;
 };
 
+// #############################################################################
 IPlugView* createEditorView(Plugin* plugin) { return new NativeView(plugin); }
 
 }  // namespace aud_vst3

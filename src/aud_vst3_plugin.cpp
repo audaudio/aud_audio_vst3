@@ -6,17 +6,21 @@
 
 #include "aud_vst3_plugin.hpp"
 
+#include <dlfcn.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
 
-#include "aud_vst3_config.hpp"
-#include "aud_vst3_skew.hpp"
+#include "aud_audio_graph.h"
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
+
+#include "aud_vst3_config.hpp"
+#include "aud_vst3_skew.hpp"
 
 namespace aud_vst3 {
 
@@ -68,17 +72,37 @@ constexpr uint32_t kDefaultMaxFrames = 4096;
 
 }  // namespace
 
+// #############################################################################
 uint32_t testParamId() {
   static const uint32_t id = aud_host_param_id("spike", "test");
   return id;
 }
 
+// #############################################################################
+std::string bundlePath() {
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<const void*>(&bundlePath), &info) == 0 ||
+      info.dli_fname == nullptr) {
+    return {};
+  }
+  // <bundle>.vst3/Contents/MacOS/<binary>
+  std::string path = info.dli_fname;
+  for (int i = 0; i < 3; ++i) path = path.substr(0, path.rfind('/'));
+  return path;
+}
+
+// #############################################################################
+// Plugin
+
+// .............................................................................
 Plugin::Plugin()
     : instance_(nextInstance.fetch_add(1)),
       probe_(std::make_unique<Probe>(instance_)) {}
 
+// .............................................................................
 Plugin::~Plugin() = default;
 
+// .............................................................................
 FUnknown* Plugin::createInstance(void*) {
   return static_cast<IAudioProcessor*>(new Plugin());
 }
@@ -180,12 +204,18 @@ tresult PLUGIN_API Plugin::setState(IBStream* state) {
 tresult PLUGIN_API Plugin::getState(IBStream* state) {
   if (state == nullptr || engine_ == nullptr) return kInvalidArgument;
   const std::string document = engine_->save();
-  if (document.empty()) return kResultFalse;
+  // setState refuses a document above the limit: it would be lost.
+  if (document.empty() || document.size() > kMaxStateLength) {
+    return kResultFalse;
+  }
   IBStreamer streamer(state, kLittleEndian);
-  streamer.writeInt32u(kStateMagic);
-  streamer.writeInt32u(kStateVersion);
-  streamer.writeInt32u(static_cast<uint32>(document.size()));
-  streamer.writeRaw(document.data(), static_cast<int32>(document.size()));
+  const uint32 length = static_cast<uint32>(document.size());
+  if (!streamer.writeInt32u(kStateMagic) ||
+      !streamer.writeInt32u(kStateVersion) || !streamer.writeInt32u(length) ||
+      streamer.writeRaw(document.data(), length) !=
+          static_cast<TSize>(length)) {
+    return kResultFalse;
+  }
   return kResultOk;
 }
 
@@ -218,6 +248,7 @@ tresult PLUGIN_API Plugin::setupProcessing(ProcessSetup& setup) {
 
 tresult PLUGIN_API Plugin::setProcessing(TBool) { return kResultOk; }
 
+// .............................................................................
 const ParamMapping* Plugin::mapping(uint32_t id) const {
   const auto it = std::lower_bound(
       mappings_.begin(), mappings_.end(), id,
@@ -310,15 +341,26 @@ tresult PLUGIN_API Plugin::setParamNormalized(ParamID tag, ParamValue value) {
   return result;
 }
 
+// .............................................................................
 const std::vector<EngineParam>& Plugin::params() const {
   static const std::vector<EngineParam> none;
   return engine_ != nullptr ? engine_->params() : none;
 }
 
-void Plugin::editBegin(uint32_t id, const void* owner) {
+// .............................................................................
+const EngineParam* Plugin::param(int32_t node, uint32_t index) const {
+  for (const EngineParam& param : params()) {
+    if (param.node == node && param.index == index) return &param;
+  }
+  return nullptr;
+}
+
+// .............................................................................
+void Plugin::editBegin(uint32_t id, const ParamObserver* owner) {
   if (openEdits_[owner].insert(id).second) beginEdit(id);
 }
 
+// .............................................................................
 void Plugin::edit(uint32_t id, double normalized, int64_t inputStamp,
                   ParamObserver* origin) {
   EditControllerEx1::setParamNormalized(id, normalized);
@@ -331,14 +373,16 @@ void Plugin::edit(uint32_t id, double normalized, int64_t inputStamp,
   }
 }
 
-void Plugin::editEnd(uint32_t id, const void* owner) {
+// .............................................................................
+void Plugin::editEnd(uint32_t id, const ParamObserver* owner) {
   const auto it = openEdits_.find(owner);
   if (it == openEdits_.end() || it->second.erase(id) == 0) return;
   if (it->second.empty()) openEdits_.erase(it);
   endEdit(id);
 }
 
-void Plugin::endEdits(const void* owner) {
+// .............................................................................
+void Plugin::endEdits(const ParamObserver* owner) {
   const auto it = openEdits_.find(owner);
   if (it == openEdits_.end()) return;
   const std::set<uint32_t> ids = it->second;
@@ -346,17 +390,21 @@ void Plugin::endEdits(const void* owner) {
   for (const uint32_t id : ids) endEdit(id);
 }
 
+// .............................................................................
 void Plugin::addObserver(ParamObserver* observer) {
   observers_.push_back(observer);
 }
 
+// .............................................................................
 void Plugin::removeObserver(ParamObserver* observer) {
   observers_.erase(std::remove(observers_.begin(), observers_.end(), observer),
                    observers_.end());
 }
 
+// .............................................................................
 double Plugin::normalized(uint32_t id) { return getParamNormalized(id); }
 
+// #############################################################################
 #if AUD_VST3_VARIANT == 'D'
 IPlugView* createEditorView(Plugin*) { return nullptr; }
 #endif

@@ -15,7 +15,7 @@ import 'package:flutter/widgets.dart';
 import 'src/aud_editor_app.dart';
 import 'src/aud_editor_instance.dart';
 import 'src/aud_editor_runner.dart';
-import 'src/aud_in_process_sink.dart';
+import 'src/aud_in_process_editor.dart';
 import 'src/aud_input_injector.dart';
 import 'src/aud_mach_clock.dart';
 import 'src/aud_shell_param_sink.dart';
@@ -78,6 +78,10 @@ class _Editor {
   final AudShellClient client;
   final AudEditorRunner runner;
   final instances = ValueNotifier<Map<int, AudEditorInstance>>({});
+
+  // How long a view the runner added may take to reach the engine.
+  static const _viewTimeout = Duration(seconds: 2);
+
   final Map<int, List<AudShellMessage>> _waiting = {};
   bool _running = false;
 
@@ -127,11 +131,7 @@ class _Editor {
   Future<void> _open(AudShellWelcome welcome) async {
     final existing = instances.value[welcome.instance];
     if (existing != null) {
-      for (final param in welcome.params) {
-        existing.sink.receive(
-          AudShellParamValue(id: param.id, value: param.value),
-        );
-      }
+      _refresh(existing, welcome);
       return;
     }
     if (_waiting.containsKey(welcome.instance)) return;
@@ -139,58 +139,86 @@ class _Editor {
     final viewId = await runner.addView(welcome.instance, welcome);
     if (viewId < 0) {
       // The engine takes no further view (no multi-view).
-      _waiting.remove(welcome.instance);
-      client.send(
-        AudShellProbe('error', {
-          'message': 'no view: multi-view is missing',
-        }, instance: welcome.instance),
-      );
+      _giveUp(welcome.instance, 'no view: multi-view is missing');
       return;
     }
-    final dispatcher = WidgetsBinding.instance.platformDispatcher;
-    while (dispatcher.view(id: viewId) == null) {
-      await Future<void>.delayed(const Duration(milliseconds: 1));
+    if (!await _viewAppears(viewId)) {
+      _giveUp(welcome.instance, 'no view: view $viewId did not appear');
+      return;
     }
-    final injector = AudInputInjector(
-      dispatch: GestureBinding.instance.handlePointerEvent,
-      viewId: viewId,
-      instance: welcome.instance,
-    );
-    final sink = AudShellParamSink(
-      send: client.send,
-      params: welcome.params,
-      instance: welcome.instance,
-      inputStamp: () => injector.lastStamp,
-      onApplied: (value) {
-        if (value.sequence == 0) return;
-        client.send(
-          AudShellProbe('paramApplied', {
-            'seq': value.sequence,
-            'id': value.id,
-            't': AudMachClock.nowNs(),
-          }, instance: welcome.instance),
-        );
-      },
-    );
-    final instance = AudEditorInstance(
-      instance: welcome.instance,
-      viewId: viewId,
-      welcome: welcome,
-      sink: sink,
-      injector: injector,
-    );
-    instances.value = {...instances.value, welcome.instance: instance};
+    _start(_instanceOf(welcome, viewId));
+  }
+
+  // Brings the warm view of [instance] up to the values of [welcome].
+  void _refresh(AudEditorInstance instance, AudShellWelcome welcome) {
+    for (final param in welcome.params) {
+      instance.sink.receive(
+        AudShellParamValue(id: param.id, value: param.value),
+      );
+    }
+  }
+
+  // Shows [instance], hands it the messages that waited for its view and
+  // tells the plugin that the editor is ready.
+  void _start(AudEditorInstance instance) {
+    instances.value = {...instances.value, instance.instance: instance};
     if (!_running) {
       _running = true;
       runWidget(_EditorViews(editor: this));
     }
-    for (final message in _waiting.remove(welcome.instance)!) {
+    for (final message in _waiting.remove(instance.instance)!) {
       _route(instance, message);
     }
     client.send(
       AudShellProbe('editorReady', {
         't': AudMachClock.nowNs(),
-      }, instance: welcome.instance),
+      }, instance: instance.instance),
+    );
+  }
+
+  // Waits until the engine has the view [viewId] that the runner added, at
+  // most [_viewTimeout]; whether it came.
+  Future<bool> _viewAppears(int viewId) async {
+    final dispatcher = WidgetsBinding.instance.platformDispatcher;
+    final waited = Stopwatch()..start();
+    while (dispatcher.view(id: viewId) == null) {
+      if (waited.elapsed >= _viewTimeout) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+    return true;
+  }
+
+  // The instance of [welcome] in the view [viewId]: its input and its sink.
+  AudEditorInstance _instanceOf(AudShellWelcome welcome, int viewId) {
+    final injector = AudInputInjector(
+      dispatch: GestureBinding.instance.handlePointerEvent,
+      viewId: viewId,
+      instance: welcome.instance,
+    );
+    return AudEditorInstance(
+      instance: welcome.instance,
+      viewId: viewId,
+      welcome: welcome,
+      sink: AudShellParamSink(
+        send: client.send,
+        params: welcome.params,
+        instance: welcome.instance,
+        inputStamp: () => injector.lastStamp,
+        onApplied: audProbeApplied(
+          send: client.send,
+          instance: welcome.instance,
+        ),
+      ),
+      injector: injector,
+    );
+  }
+
+  // Gives up the view of [instance]: drops the messages that waited for it
+  // and tells the plugin why.
+  void _giveUp(int instance, String message) {
+    _waiting.remove(instance);
+    client.send(
+      AudShellProbe('error', {'message': message}, instance: instance),
     );
   }
 
