@@ -25,10 +25,17 @@
 // that does not take the focus, for at most s seconds: the editor's frames
 // arrive (written as PNG with --snapshot <png>), and a click at --click x,y
 // (points of the view) sends the editor's notes to the DAW on the plugin's
-// event output.
+// event output and lets the editor draw the pressed button; --clicks n
+// repeats it, --click-pause s waits between the clicks, and --cover lays the
+// host's window over the editor's own window first, as a DAW's plugin
+// window does. --hold-surfaces keeps every surface the view showed in use,
+// as another process may, for --hold-seconds s (until the end without): the
+// editor has to replace its surfaces to go on.
 //
 //   aud_vst3_host <bundle.vst3> [--wav <dir>] [--presets n]
-//     [--realtime-seconds s] [--editor s [--snapshot <png>] [--click x,y]]
+//     [--realtime-seconds s] [--editor s [--snapshot <png>] [--click x,y]
+//     [--clicks n] [--click-pause s] [--cover] [--hold-surfaces
+//     [--hold-seconds s]]]
 
 #import <Cocoa/Cocoa.h>
 #import <ImageIO/ImageIO.h>
@@ -422,7 +429,8 @@ NSEvent* mouseEvent(NSEventType type, NSWindow* window, NSPoint point) {
 // Shows the plugin's editor as a DAW does and checks that its frames
 // arrive and that a click at (clickX, clickY) plays notes to the DAW.
 void checkEditor(Instance& instance, double seconds, const std::string& snapshot,
-                 bool click, double clickX, double clickY) {
+                 bool click, double clickX, double clickY, int clicks, double clickPause,
+                 bool cover, bool holdSurfaces, double holdSeconds) {
   IPtr<IPlugView> view = owned(instance.controller()->createView(ViewType::kEditor));
   if (!view || view->isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue) {
     report("editor", false, "\"error\":\"no NSView editor\"");
@@ -453,9 +461,41 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
   const double blockSeconds = kBlock / kSampleRate;
   double rendered = nowSeconds();
   std::vector<std::string> notes;
+  // The surfaces the host keeps in use (--hold-surfaces), with the time it
+  // took them.
+  std::vector<std::pair<IOSurfaceRef, double>> held;
+  size_t heldCount = 0;
+  auto let = [](IOSurfaceRef surface) {
+    IOSurfaceDecrementUseCount(surface);
+    CFRelease(surface);
+  };
+  auto hold = [&] {
+    if (!holdSurfaces) return;
+    const double now = nowSeconds();
+    if (holdSeconds > 0) {
+      for (auto it = held.begin(); it != held.end();) {
+        if (now - it->second >= holdSeconds) {
+          let(it->first);
+          it = held.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    IOSurfaceRef shown = shownSurface(window);
+    if (shown == nullptr) return;
+    for (const auto& entry : held) {
+      if (entry.first == shown) return;
+    }
+    CFRetain(shown);
+    IOSurfaceIncrementUseCount(shown);
+    held.emplace_back(shown, now);
+    heldCount += 1;
+  };
   auto pump = [&](double wait, const std::function<bool()>& done) {
     const double end = nowSeconds() + wait;
     while (nowSeconds() < end && !done()) {
+      hold();
       NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                           untilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]
                                              inMode:NSDefaultRunLoopMode
@@ -482,19 +522,49 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
              ",\"height\":" + std::to_string(size.getHeight()));
 
   if (framed && click) {
+    // As a DAW's plugin window does once the DAW is active again: the
+    // host's window lies over the editor's own window.
+    if (cover) [window orderFrontRegardless];
     // The view is flipped and fills the content: y counts from the top.
     NSView* pluginView = window.contentView.subviews.firstObject;
     const NSPoint point = NSMakePoint(clickX, size.getHeight() - clickY);
-    notes.clear();
-    [pluginView mouseDown:mouseEvent(NSEventTypeLeftMouseDown, window, point)];
-    pump(0.3, [] { return false; });
-    [pluginView mouseUp:mouseEvent(NSEventTypeLeftMouseUp, window, point)];
-    pump(2, [&] { return !notes.empty(); });
-    // The rest of the chord follows within a few blocks.
-    pump(0.3, [] { return false; });
-    std::string played;
-    for (const auto& note : notes) played += (played.empty() ? "\"" : ",\"") + note + "\"";
-    report("editorMidi", !notes.empty(), "\"notes\":[" + played + "]");
+    // The frame shown now: its surface and the seed of its content.
+    auto shown = [&] {
+      IOSurfaceRef now = shownSurface(window);
+      return now == nullptr ? std::pair<uint32_t, uint32_t>{0, 0}
+                            : std::pair<uint32_t, uint32_t>{IOSurfaceGetID(now),
+                                                            IOSurfaceGetSeed(now)};
+    };
+    int played = 0;
+    int redrawn = 0;
+    int firstStill = -1;
+    std::string chord;
+    for (int i = 0; i < clicks; ++i) {
+      notes.clear();
+      const auto before = shown();
+      [pluginView mouseDown:mouseEvent(NSEventTypeLeftMouseDown, window, point)];
+      // A pressed button lights up: the editor draws a new frame.
+      pump(0.4, [&] { return shown() != before; });
+      const bool redraw = shown() != before;
+      pump(0.1, [] { return false; });
+      [pluginView mouseUp:mouseEvent(NSEventTypeLeftMouseUp, window, point)];
+      pump(2, [&] { return !notes.empty(); });
+      // The rest of the chord follows within a few blocks.
+      pump(0.3, [] { return false; });
+      if (!notes.empty()) played += 1;
+      if (redraw) redrawn += 1;
+      else if (firstStill < 0) firstStill = i;
+      if (i == 0) {
+        for (const auto& note : notes) chord += (chord.empty() ? "\"" : ",\"") + note + "\"";
+      }
+      pump(clickPause, [] { return false; });
+    }
+    report("editorMidi", played == clicks,
+           "\"clicks\":" + std::to_string(clicks) + ",\"played\":" +
+               std::to_string(played) + ",\"notes\":[" + chord + "]");
+    report("editorRedraw", redrawn == clicks,
+           "\"clicks\":" + std::to_string(clicks) + ",\"redrawn\":" +
+               std::to_string(redrawn) + ",\"firstStill\":" + std::to_string(firstStill));
   }
   // Lets the last frame arrive before it is written.
   pump(0.5, [] { return false; });
@@ -504,6 +574,10 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
            "\"path\":\"" + snapshot + "\",\"format\":\"" +
                fourCc(IOSurfaceGetPixelFormat(surface)) + "\"");
   }
+  if (holdSurfaces) {
+    report("heldSurfaces", true, "\"count\":" + std::to_string(heldCount));
+  }
+  for (const auto& entry : held) let(entry.first);
   view->removed();
   view = nullptr;
   instance.stop();
@@ -516,7 +590,9 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     std::fprintf(stderr, "usage: aud_vst3_host <bundle.vst3> [--wav <dir>] "
                          "[--presets n] [--realtime-seconds s] [--editor s "
-                         "[--snapshot <png>] [--click x,y]]\n");
+                         "[--snapshot <png>] [--click x,y] [--clicks n] "
+                         "[--click-pause s] [--cover] [--hold-surfaces "
+                         "[--hold-seconds s]]]\n");
     return 2;
   }
   const std::string bundle = argv[1];
@@ -527,6 +603,11 @@ int main(int argc, char** argv) {
   std::string snapshot;
   bool click = false;
   double clickX = 0, clickY = 0;
+  int clicks = 1;
+  double clickPause = 0;
+  bool cover = false;
+  bool holdSurfaces = false;
+  double holdSeconds = 0;
   for (int i = 2; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--wav" && i + 1 < argc) wavDir = argv[++i];
@@ -534,6 +615,11 @@ int main(int argc, char** argv) {
     else if (arg == "--realtime-seconds" && i + 1 < argc) realtimeSeconds = std::atof(argv[++i]);
     else if (arg == "--editor" && i + 1 < argc) editorSeconds = std::atof(argv[++i]);
     else if (arg == "--snapshot" && i + 1 < argc) snapshot = argv[++i];
+    else if (arg == "--clicks" && i + 1 < argc) clicks = std::max(1, std::atoi(argv[++i]));
+    else if (arg == "--click-pause" && i + 1 < argc) clickPause = std::atof(argv[++i]);
+    else if (arg == "--cover") cover = true;
+    else if (arg == "--hold-surfaces") holdSurfaces = true;
+    else if (arg == "--hold-seconds" && i + 1 < argc) holdSeconds = std::atof(argv[++i]);
     else if (arg == "--click" && i + 1 < argc) {
       click = std::sscanf(argv[++i], "%lf,%lf", &clickX, &clickY) == 2;
     }
@@ -597,7 +683,10 @@ int main(int argc, char** argv) {
     report("midiMapping", false, "\"error\":\"no IMidiMapping\"");
   }
 
-  if (editorSeconds > 0) checkEditor(a, editorSeconds, snapshot, click, clickX, clickY);
+  if (editorSeconds > 0) {
+    checkEditor(a, editorSeconds, snapshot, click, clickX, clickY, clicks, clickPause,
+                cover, holdSurfaces, holdSeconds);
+  }
 
   // Every preset sounds, offline.
   if (!a.start(kOffline, kBlock)) {

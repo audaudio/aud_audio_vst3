@@ -102,6 +102,10 @@ constexpr size_t kMaxMidiBytes = 4096;
 // The background of the view until the editor's first frame.
 constexpr double kBackground[3] = {0.11, 0.12, 0.14};
 
+// A frame that took longer from the editor to the view - the DAW's main
+// thread did not run the plugin's work - is logged, at most once a second.
+constexpr int64_t kLateFrameNs = 250'000'000;
+
 int64_t nowNs() { return aud_clock_now_ns(); }
 
 std::string randomToken() {
@@ -448,7 +452,9 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
     json.set("scale", number(scale));
     json.set("window", number(static_cast<double>(windowNumber)));
     json.set("visible", aud::Json::ofBool(seen));
+    if (seen != sentVisible_ || !placed_) logVisibility(seen);
     sentVisible_ = seen;
+    placed_ = true;
     return json;
   }
 
@@ -489,6 +495,7 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
     surfaceLayer_.contents = (__bridge id)frame.surface;
     [CATransaction commit];
     CFRelease(frame.surface);
+    logLateFrame(frame);
     if (shownGeneration_ == frame.generation && shownIndex_ >= 0 &&
         static_cast<uint32_t>(shownIndex_) != frame.index) {
       host_->releaseSurface(frame.instance, static_cast<uint32_t>(shownIndex_),
@@ -496,6 +503,37 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
     }
     shownIndex_ = static_cast<int>(frame.index);
     shownGeneration_ = frame.generation;
+  }
+
+  // ...........................................................................
+  // Logs a frame that reached the view late.
+  void logLateFrame(const SurfaceFrame& frame) {
+    const int64_t now = nowNs();
+    const int64_t waited = now - static_cast<int64_t>(frame.captured);
+    if (waited < kLateFrameNs || waited > 60'000'000'000LL ||
+        now - lastLateLog_ < 1'000'000'000) {
+      return;
+    }
+    lastLateLog_ = now;
+    logInfo("Instance " + std::to_string(plugin_->instance()) +
+            ": a frame of the editor reached the view after " +
+            std::to_string(waited / 1'000'000) + " ms");
+  }
+
+  // ...........................................................................
+  // Logs a change of the view's visibility, which pauses or resumes the
+  // editor, with what it rests on.
+  void logVisibility(bool seen) const {
+    NSWindow* window = view_.window;
+    logInfo("Instance " + std::to_string(plugin_->instance()) + ": the view " +
+            (seen ? "shows" : "hides") + " (window " +
+            (window == nil ? "none"
+                           : std::string(window.isVisible ? "visible" : "invisible") +
+                                 (window.isMiniaturized ? ", miniaturized" : "") +
+                                 ((window.occlusionState & NSWindowOcclusionStateVisible) != 0
+                                      ? ", not occluded"
+                                      : ", occluded")) +
+            ")");
   }
 
   // ...........................................................................
@@ -709,6 +747,8 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
   int shownIndex_ = -1;
   uint32_t shownGeneration_ = 0;
   bool sentVisible_ = false;
+  bool placed_ = false;
+  int64_t lastLateLog_ = 0;
 };
 
 // #############################################################################

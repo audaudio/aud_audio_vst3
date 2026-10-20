@@ -45,8 +45,17 @@
 - Add an editor check to the VST3 test host (ticket 37)
 
 - --editor shows the editor in a window that takes no focus and waits for its frames
+
 - --snapshot writes the frame as PNG, also from 10-bit extended range surfaces
+
 - --click taps the view and expects the editor's notes on the event output
+
+- Add frame diagnostics to the VST3 editor view (ticket 37)
+
+- The view logs when it shows or hides, with the window's state
+- A frame that reaches the view late is logged, at most once a second
+- Test host: repeated clicks check that every click redraws
+- Test host: --cover, --hold-surfaces and --hold-seconds as a DAW may do
 
 ## 0.1.0 - 2026-10-11
 
