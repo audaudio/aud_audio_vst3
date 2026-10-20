@@ -70,6 +70,50 @@ void main() {
         'height': 220,
         'scale': 2,
         'version': audShellProtocolVersion,
+        'presets': <Object?>[],
+        'preset': -1,
+      },
+    ),
+    (
+      const AudShellWelcome(
+        instance: 2,
+        name: 'Audanika',
+        params: [],
+        width: 1024,
+        height: 640,
+        scale: 2,
+        presets: [AudShellPresetInfo(id: 'a', name: 'A')],
+        preset: 0,
+      ),
+      {
+        'type': 'welcome',
+        'instance': 2,
+        'name': 'Audanika',
+        'params': <Object?>[],
+        'width': 1024,
+        'height': 640,
+        'scale': 2,
+        'version': audShellProtocolVersion,
+        'presets': [
+          {'id': 'a', 'name': 'A'},
+        ],
+        'preset': 0,
+      },
+    ),
+    (
+      const AudShellPreset(3, instance: 1),
+      {'type': 'preset', 'instance': 1, 'index': 3},
+    ),
+    (
+      const AudShellSelectPreset(4, instance: 1),
+      {'type': 'selectPreset', 'instance': 1, 'index': 4},
+    ),
+    (
+      const AudShellMidi([0x90, 60, 100], instance: 1),
+      {
+        'type': 'midi',
+        'instance': 1,
+        'bytes': [0x90, 60, 100],
       },
     ),
     (

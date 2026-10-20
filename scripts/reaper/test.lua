@@ -47,6 +47,11 @@ end
 local _, fxName = reaper.TrackFX_GetFXName(track, fx, "")
 record("added", ',"name":' .. jsonString(fxName) .. ',"params":' ..
   reaper.TrackFX_GetNumParams(track, fx))
+-- The plugin's editor in a floating window while the test runs.
+if (config.showEditor or 0) > 0 then
+  reaper.TrackFX_Show(track, fx, 3)
+  record("editorShown")
+end
 
 -- The parameter of the presets: its name starts with "Preset".
 local presetParam = -1
@@ -104,13 +109,14 @@ reaper.OnPlayButton()
 local function playing()
   local now = reaper.time_precise() - start
   peak = math.max(peak, reaper.Track_GetPeakInfo(track, 0), reaper.Track_GetPeakInfo(track, 1))
-  if now < 4 then
+  if now < math.max(4, config.showEditor or 0) then
     if reaper.GetPlayState() & 1 == 0 and now < 1 then reaper.OnPlayButton() end
     reaper.defer(playing)
     return
   end
   reaper.OnStopButton()
   record("played", string.format(',"peak":%.6f,"audio":%d', peak, reaper.Audio_IsRunning()))
+  if (config.showEditor or 0) > 0 then reaper.TrackFX_Show(track, fx, 2) end
   -- The project opens again: the plugin restores its preset.
   reaper.Main_openProject("noprompt:" .. config.project)
   local reopened = reaper.GetTrack(0, 0)

@@ -41,20 +41,29 @@ the node packages it names linked in.
   does and checks that every preset sounds offline, the program list,
   the MIDI mapping, the state across two instances and the time of
   realtime blocks; it writes each preset's sound as WAV on request.
-- The editor of the spike S0-plugin-ui (ticket 24, decision plugin-003) -
-  a Flutter app in a process of its own, shown through shared IOSurfaces
-  (`src/aud_vst3_remote_view.mm`, `editor/`) - is not built until the
-  editor of ticket 37 replaces it; the plugin shows the DAW's generic view.
+- The editor (decision plugin-003, variant S; `src/aud_vst3_editor.mm`):
+  the Flutter app the configuration names under `editor`, copied into the
+  bundle's `Contents/Helpers` by `build-plugin.js --editor <app>`. One
+  editor process serves every instance of a plugin build in the DAW, one
+  Flutter view per instance, shown through shared IOSurfaces. The plugin
+  starts it with a connected socket on file descriptor 3 and finds its
+  surfaces under a Mach name prefixed with the configuration's
+  `appGroup`, so that a sandboxed editor reaches both (decision
+  plugin-007). The editor plays MIDI through the plugin, which also sends
+  it to the DAW on its event output, and chooses the plugin's preset.
+  `AUD_VST3_LOG=<file>` collects the lines of plugin and editor in a test.
+  Without `editor` the plugin shows the DAW's generic view.
 - The subset of the VST3 SDK 3.8.1 (MIT) in `src/third_party/vst3sdk`; see
   `src/third_party/NOTICES.md`.
 
 ## Dart API
 
-The protocol of the spike's editor; the editor of ticket 37 builds on it.
-
 `aud_audio_vst3.dart` is the editor's end of the shell protocol between the
 plugin and its editor process: JSON messages, framed by `AudShellCodec`,
-over the Unix domain socket the plugin listens on.
+over the socket the plugin hands the editor as file descriptor 3
+(`AudShellClient.fromFd`, read and written by `AudShellFd` through FFI,
+since `dart:io` opens no inherited socket), or over a Unix domain socket
+the plugin listens on (`AudShellClient.connect`).
 `example/aud_audio_vst3_example.dart` runs both ends in one process.
 
 ```dart
@@ -74,19 +83,23 @@ editor.send(                                         // a knob moved
 await editor.close();                                // both directions at once
 ```
 
-- `AudShellClient.connect(path, hello)` connects and sends the
-  `AudShellHello` with the token the plugin started the editor with;
+- `AudShellClient.fromFd(fd, hello)` and `AudShellClient.connect(path,
+  hello)` connect and send the `AudShellHello` with the token the plugin
+  started the editor with;
   `messages` carries the plugin's messages and ends when the plugin closes
   the socket, `send(message)` frames a message to the plugin, `close()`
   ends both directions.
 - From the plugin: `AudShellWelcome` (the document's `AudShellParam`s, the
-  editor's size and scale), `AudShellParamValue` (a parameter changed in
+  editor's size and scale, the presets as `AudShellPresetInfo`s and the
+  current one), `AudShellPreset` (the plugin plays another preset), `AudShellParamValue` (a parameter changed in
   the plugin, with its sequence number), `AudShellMeter`, `AudShellInput`
   (an input event of the plugin's view, of an `AudShellInputKind`),
   `AudShellPlace` (where the plugin's view is on the screen),
   `AudShellShow`, `AudShellHide`, `AudShellRemove` and `AudShellClose`.
-- To the plugin: `AudShellHello`, `AudShellCommand` (an `AudCommand` of
-  `aud_audio_core` with the time stamp of the input behind it),
+- To the plugin: `AudShellHello`, `AudShellMidi` (MIDI 1.0 bytes the
+  plugin plays and sends to the DAW), `AudShellSelectPreset`,
+  `AudShellCommand` (an `AudCommand` of `aud_audio_core` with the time
+  stamp of the input behind it),
   `AudShellGesture` (`AudShellGesturePhase.begin` and `end` of an
   automation edit), `AudShellCursor` and `AudShellProbe` (a measurement
   record for the plugin's probe log).
@@ -124,6 +137,3 @@ live, its preset restored with the project (`--plugin <name>`).
 `vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
 `src/third_party/vst3sdk` and writes `src/third_party/NOTICES.md`.
 
-Until `aud_audio_ui_controls` 0.1.0 is released, the editor builds against
-the checkout of `aud_audio_ui_controls` next to this repo
-(`editor/pubspec_overrides.yaml`).

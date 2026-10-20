@@ -63,6 +63,14 @@ struct Settings {
   std::vector<ShellControl> controls;
   // The editor app in Contents/Helpers; empty for the generic view.
   std::string editor;
+  // The app group the sandboxed editor belongs to: the prefix of the Mach
+  // names the plugin shares with it; empty for an editor without sandbox.
+  std::string appGroup;
+  // The size of the editor's view in points, and the smallest it may get.
+  double editorWidth = 1024;
+  double editorHeight = 640;
+  double editorMinWidth = 768;
+  double editorMinHeight = 480;
   // The graph document as JSON text.
   std::string document;
   std::vector<ShellPreset> presets;

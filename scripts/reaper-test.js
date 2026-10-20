@@ -18,12 +18,16 @@
 // the user's plug-in folders, e.g. through the link of an app. REAPER comes
 // to the front while it runs.
 //
+// With --show-editor the plugin's editor shows in a floating window for
+// that many seconds while the item plays, and its window is captured as a
+// PNG next to the log.
+//
 //   node scripts/reaper-test.js [--plugin "Audanika"] [--render 0,13,27]
-//     [--presets 28]
+//     [--presets 28] [--show-editor 10]
 
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -37,12 +41,13 @@ const work = path.join(root, '.dart_tool', 'reaper');
 const audiblePeak = 0.001;
 
 function parseArgs(argv) {
-  const options = { plugin: 'Audanika', render: [0], presets: 1 };
+  const options = { plugin: 'Audanika', render: [0], presets: 1, showEditor: 0 };
   for (let i = 0; i < argv.length; ++i) {
     const arg = argv[i];
     if (arg === '--plugin') options.plugin = argv[++i];
     else if (arg === '--render') options.render = argv[++i].split(',').map(Number);
     else if (arg === '--presets') options.presets = Number(argv[++i]);
+    else if (arg === '--show-editor') options.showEditor = Number(argv[++i]);
     else throw new Error(`Unknown option ${arg}`);
   }
   if (options.render.some((index) => !Number.isInteger(index) || index < 0 || index >= options.presets)) {
@@ -108,6 +113,33 @@ function wavPeak(file) {
   throw new Error(`${file} is no WAV file this script reads`);
 }
 
+// The windows of REAPER whose title names `plugin`, by CGWindowList.
+function editorWindows(plugin) {
+  const script = `
+import CoreGraphics
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+for w in list where (w[kCGWindowOwnerName as String] as? String) == "REAPER" {
+  let name = w[kCGWindowName as String] as? String ?? ""
+  if name.contains(${JSON.stringify(plugin)}) { print(w[kCGWindowNumber as String]!) }
+}`;
+  const result = spawnSync('swift', ['-e', script], { encoding: 'utf8' });
+  return result.stdout.split('\n').filter(Boolean);
+}
+
+// Captures the editor's window once the log says it shows and the editor
+// had time to start.
+function captureEditor(log, runDir, plugin) {
+  const timer = setInterval(() => {
+    if (!fs.existsSync(log) || !fs.readFileSync(log, 'utf8').includes('"editorShown"')) return;
+    clearInterval(timer);
+    setTimeout(() => {
+      editorWindows(plugin).forEach((id, i) => {
+        spawnSync('screencapture', ['-x', '-o', '-l', id, path.join(runDir, `editor-${i}.png`)]);
+      });
+    }, 5000);
+  }, 200);
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const ini = prepareResources();
@@ -122,16 +154,19 @@ async function main() {
     configFile,
     `return { plugin = ${JSON.stringify(options.plugin)}, presets = ${options.presets}, ` +
       `render = { ${options.render.join(', ')} }, renderDir = ${JSON.stringify(renderDir)}, ` +
+      `showEditor = ${options.showEditor}, ` +
       `project = ${JSON.stringify(project)}, log = ${JSON.stringify(log)} }\n`,
   );
   const reaper = spawn(
     'open',
-    ['-n', '-W', '-a', reaperApp, '--env', `AUD_REAPER_CONFIG=${configFile}`, '--args',
+    ['-n', '-W', '-a', reaperApp, '--env', `AUD_REAPER_CONFIG=${configFile}`,
+      '--env', `AUD_VST3_LOG=${path.join(runDir, 'plugin.log')}`, '--args',
       '-cfgfile', ini, '-nosplash', '-newinst', '-new', '-saveas', project,
       path.join(root, 'scripts', 'reaper', 'test.lua')],
     { stdio: 'ignore' },
   );
   const exited = new Promise((resolve) => reaper.on('exit', resolve));
+  if (options.showEditor > 0) captureEditor(log, runDir, options.plugin);
   const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 300_000));
   if ((await Promise.race([exited, timeout])) === 'timeout') {
     throw new Error('REAPER did not finish within 5 minutes');
@@ -164,6 +199,10 @@ async function main() {
     saved: saved?.preset,
     reopened: reopened?.preset,
   });
+  if (options.showEditor > 0) {
+    const shots = fs.readdirSync(runDir).filter((file) => file.startsWith('editor-'));
+    check('editor', shots.length > 0, { shots: shots.map((file) => path.join(runDir, file)) });
+  }
   check('done', events.some((e) => e.kind === 'done'), { log });
   process.exit(checks.every((c) => c.ok) ? 0 : 1);
 }

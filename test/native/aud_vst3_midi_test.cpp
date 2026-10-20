@@ -96,5 +96,21 @@ int main() {
       expectEqual(bottom.data1 | (bottom.data2 << 7), 0u);
     });
   });
+  group("raw messages", [] {
+    test("a channel voice message as it is", [] {
+      const Midi cc = midiOf(midiEvent(0xB2, 1, 99, 5));
+      expectEqual(cc.status, 0xB2u);
+      expectEqual(cc.data1, 1u);
+      expectEqual(cc.data2, 99u);
+      expectEqual(midiEvent(0x90, 60, 1, 5).sample_offset, 5u);
+    });
+    test("the data bytes of a status", [] {
+      expectEqual(midiDataBytes(0x93), 2u);
+      expectEqual(midiDataBytes(0xC0), 1u);
+      expectEqual(midiDataBytes(0xD5), 1u);
+      expectEqual(midiDataBytes(0xF8), 0u);
+      expectEqual(midiDataBytes(0x40), 0u);
+    });
+  });
   return aud_vst3_test::finish();
 }

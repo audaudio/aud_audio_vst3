@@ -11,6 +11,10 @@
 #include <limits.h>
 #include <os/log.h>
 #include <stdlib.h>
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
 #include <sys/stat.h>
 
 #include "aud_vst3_config.hpp"
@@ -108,13 +112,34 @@ std::string contentDirectory(const std::vector<std::string>& locations,
 }
 
 // #############################################################################
+std::string logFile() {
+  const char* file = std::getenv("AUD_VST3_LOG");
+  return file != nullptr ? file : "";
+}
+
+namespace {
+
+void logToFile(const char* level, const std::string& message) {
+  const std::string file = logFile();
+  if (file.empty()) return;
+  if (FILE* out = std::fopen(file.c_str(), "a")) {
+    std::fprintf(out, "%s %d %s\n", level, getpid(), message.c_str());
+    std::fclose(out);
+  }
+}
+
+}  // namespace
+
+// #############################################################################
 void logInfo(const std::string& message) {
   os_log_info(pluginLog(), "%{public}s", message.c_str());
+  logToFile("info", message);
 }
 
 // #############################################################################
 void logError(const std::string& message) {
   os_log_error(pluginLog(), "%{public}s", message.c_str());
+  logToFile("error", message);
 }
 
 }  // namespace aud_vst3

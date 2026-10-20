@@ -13,4 +13,5 @@ library;
 export 'src/aud_audio_vst3_version.dart';
 export 'src/aud_shell_client.dart';
 export 'src/aud_shell_codec.dart';
+export 'src/aud_shell_fd.dart';
 export 'src/aud_shell_message.dart';

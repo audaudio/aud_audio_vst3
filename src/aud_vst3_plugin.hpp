@@ -25,7 +25,9 @@
 
 #include <array>
 #include <atomic>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -45,6 +47,33 @@ namespace aud_vst3 {
 // #############################################################################
 // The id of the stepped parameter "Preset", also the id of the program list.
 uint32_t presetParamId();
+
+// #############################################################################
+// What a view learns from the plugin, on the DAW's UI thread.
+class PluginObserver {
+ public:
+  // ...........................................................................
+  // Destroys the observer; it must have been removed from the plugin.
+  virtual ~PluginObserver() = default;
+
+  // ...........................................................................
+  // A parameter the DAW sees changed through the DAW, a preset or another
+  // view.
+  virtual void paramChanged(uint32_t id, double normalized) = 0;
+
+  // ...........................................................................
+  // The preset at `index` plays now.
+  virtual void presetChanged(uint32_t index) = 0;
+};
+
+// #############################################################################
+// What the editor keeps per plugin instance across its views.
+class EditorState {
+ public:
+  // ...........................................................................
+  // Destroys the state, at the latest when the plugin terminates.
+  virtual ~EditorState() = default;
+};
 
 // #############################################################################
 // The plugin; see above. The DAW calls it on its UI thread, and process() on
@@ -106,8 +135,11 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
       Steinberg::Vst::CtrlNumber midiControllerNumber,
       Steinberg::Vst::ParamID& id) SMTG_OVERRIDE;
 
+  Steinberg::tresult PLUGIN_API setParamNormalized(
+      Steinberg::Vst::ParamID tag, Steinberg::Vst::ParamValue value) SMTG_OVERRIDE;
+
   // ###########################################################################
-  // The settings and the engine, for the views
+  // The settings, the engine and the editor (aud_vst3_editor.mm)
 
   // ...........................................................................
   // The settings of the bundle; empty before initialize.
@@ -116,6 +148,66 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   // ...........................................................................
   // The engine; null after terminate, while a view may still exist.
   Engine* engine() { return engine_.get(); }
+
+  // ...........................................................................
+  // The number of this plugin instance in the DAW process, from 1.
+  uint32_t instance() const { return instance_; }
+
+  // ...........................................................................
+  // The mapping of the graph parameter `id` the DAW sees, or null.
+  const ParamMapping* mapping(uint32_t id) const;
+
+  // ...........................................................................
+  // The normalized value of parameter `id` as the controller holds it.
+  double normalized(uint32_t id) { return getParamNormalized(id); }
+
+  // ...........................................................................
+  // The index of the preset that plays.
+  uint32_t preset() const { return static_cast<uint32_t>(preset_.load()); }
+
+  // ...........................................................................
+  // The state of the editor; reset at terminate.
+  std::shared_ptr<EditorState>& editorState() { return editorState_; }
+
+  // ...........................................................................
+  // [UI thread] Adds `observer`, which learns every change from now on.
+  void addObserver(PluginObserver* observer);
+
+  // ...........................................................................
+  // [UI thread] Removes `observer`.
+  void removeObserver(PluginObserver* observer);
+
+  // ...........................................................................
+  // [UI thread] Begins a gesture of `owner` on parameter `id`. The plugin
+  // keeps the open gestures per owner, so that endEdits() closes what a
+  // closed view or a crashed editor left open: the DAW must see an endEdit
+  // for every beginEdit.
+  void editBegin(uint32_t id, const PluginObserver* owner);
+
+  // ...........................................................................
+  // [UI thread] Changes parameter `id` in the controller, in the DAW and in
+  // every observer but `origin`.
+  void edit(uint32_t id, double normalized, PluginObserver* origin);
+
+  // ...........................................................................
+  // [UI thread] Ends the gesture of `owner` on parameter `id`.
+  void editEnd(uint32_t id, const PluginObserver* owner);
+
+  // ...........................................................................
+  // [UI thread] Ends every gesture `owner` left open.
+  void endEdits(const PluginObserver* owner);
+
+  // ...........................................................................
+  // [UI thread] The editor chose the preset at `index`: it plays, the DAW
+  // records the change like a program change, the other observers hear it.
+  void selectPreset(uint32_t index, PluginObserver* origin);
+
+  // ...........................................................................
+  // [UI thread] MIDI 1.0 bytes the editor played: their channel voice
+  // messages play from the next block on and leave through the event
+  // output, so that a MIDI track records them; false when they did not all
+  // fit the queue.
+  bool editorMidi(const std::vector<uint8_t>& bytes);
 
   // ###########################################################################
   // FUnknown
@@ -136,6 +228,15 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
     float value;
   };
 
+  // A message the editor played, on its way to the next block.
+  struct EditorMidi {
+    uint8_t status;
+    uint8_t data1;
+    uint8_t data2;
+  };
+
+  void notifyPreset(uint32_t index);
+
   void addParameters();
   void addMidiParameters();
   void presetApplied(Engine& engine, uint32_t index);
@@ -147,10 +248,11 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
                   uint32_t frames) AUD_VST3_NONBLOCKING;
   void takeTransport(Steinberg::Vst::ProcessData& data,
                      uint32_t frames) AUD_VST3_NONBLOCKING;
+  void takeEditorMidi(Steinberg::Vst::ProcessData& data) AUD_VST3_NONBLOCKING;
   void addEvent(const AudEvent& event) AUD_VST3_NONBLOCKING;
-  const ParamMapping* mapping(uint32_t id) const;
   int32_t controlIndex(uint32_t id) const;
 
+  const uint32_t instance_;
   Settings settings_;
   std::unique_ptr<Engine> engine_;
   // The engine as process() sees it and the process calls in flight:
@@ -170,6 +272,11 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   std::atomic<int32_t> preset_{0};
   std::unique_ptr<std::atomic<float>[]> controlValues_;
   AudSpscQueue<ControlChange> controlChanges_{64};
+  AudSpscQueue<EditorMidi> editorMidi_{1024};
+  // The views and their open gestures (UI thread).
+  std::vector<PluginObserver*> observers_;
+  std::map<const PluginObserver*, std::set<uint32_t>> openEdits_;
+  std::shared_ptr<EditorState> editorState_;
   // Whether the views and the UI thread's blocks may still touch the
   // plugin; terminate clears it on the UI thread.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
@@ -185,6 +292,10 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   uint32_t latency_ = 0;
   uint32_t tail_ = 0;
 };
+
+// #############################################################################
+// Creates the editor's view of `plugin` (aud_vst3_editor.mm).
+Steinberg::IPlugView* createEditorView(Plugin* plugin);
 
 }  // namespace aud_vst3
 

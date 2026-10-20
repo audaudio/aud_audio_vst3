@@ -13,7 +13,6 @@
 #include <cstdlib>
 #include <string>
 
-#include "aud_vst3_config.hpp"
 
 namespace aud_vst3 {
 
@@ -44,8 +43,6 @@ void setDelegateOf(id self, ViewDelegate* delegate) {
 
 BOOL yes(id, SEL) { return YES; }
 BOOL yesForEvent(id, SEL, NSEvent*) { return YES; }
-
-int flavor(id, SEL) { return AUD_VST3_FLAVOR; }
 
 void drawRect(id self, SEL, NSRect dirty) {
   if (ViewDelegate* d = delegateOf(self)) d->drawRect(self, dirty);
@@ -115,21 +112,15 @@ std::string randomName() {
 }
 
 Class createClass() {
-#ifdef AUD_VST3_NO_HYGIENE
-  className() = "AudVst3SpikeView";
-  if (Class existing = objc_lookUpClass(className().c_str())) return existing;
-#else
   do {
     className() = randomName();
   } while (objc_lookUpClass(className().c_str()) != nil);
-#endif
   Class cls = objc_allocateClassPair([NSView class], className().c_str(), 0);
   class_addIvar(cls, kDelegateIvar, sizeof(void*), alignof(void*) == 8 ? 3 : 2,
                 "^v");
   class_addMethod(cls, @selector(isFlipped), (IMP)yes, "c@:");
   class_addMethod(cls, @selector(acceptsFirstResponder), (IMP)yes, "c@:");
   class_addMethod(cls, @selector(acceptsFirstMouse:), (IMP)yesForEvent, "c@:@");
-  class_addMethod(cls, @selector(audFlavor), (IMP)flavor, "i@:");
   class_addMethod(cls, @selector(drawRect:), (IMP)drawRect,
                   "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
   for (SEL selector :
@@ -183,13 +174,6 @@ NSView* makeView(ViewDelegate* delegate, NSRect frame) {
 // #############################################################################
 void clearDelegate(NSView* view) {
   if (view != nil) setDelegateOf(view, nullptr);
-}
-
-// #############################################################################
-int implementationFlavor(NSView* view) {
-  if (![view respondsToSelector:@selector(audFlavor)]) return 0;
-  return reinterpret_cast<int (*)(id, SEL)>(objc_msgSend)(view,
-                                                         @selector(audFlavor));
 }
 
 // #############################################################################

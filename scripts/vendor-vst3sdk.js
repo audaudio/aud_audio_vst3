@@ -237,13 +237,12 @@ vendored on ${today} for ticket 24 by \`scripts/vendor-vst3sdk.js\`.
 | VST 3 SDK | \`vst3sdk/base\`, \`vst3sdk/pluginterfaces\`, \`vst3sdk/public.sdk\` | ${tag} | MIT, \`vst3sdk/LICENSE.txt\` and the \`LICENSE.txt\` of each folder |
 | json.h | \`vst3sdk/public.sdk/source/vst/moduleinfo/json.h\` | ${tag} | Unlicense (public domain), header of the file |
 
-The editor app (\`editor/\`) carries the Flutter engine and framework
-(BSD-3-Clause) into the bundles: in \`Contents/Helpers\` for the variants
-A, S and F, in \`Contents/Frameworks\` for B. \`flutter build\` writes
-their notices and those of every Dart package into the app's
-\`flutter_assets/NOTICES.Z\`, which travels with it. \`build-plugin.js\`
-copies these notices and \`vst3sdk/LICENSE.txt\` into each bundle's
-\`Contents/Resources\`.
+The editor app an app builds (\`plugin.json\` \`editor\`) carries the
+Flutter engine and framework (BSD-3-Clause) into the bundle's
+\`Contents/Helpers\`. \`flutter build\` writes their notices and those of
+every Dart package into the app's \`flutter_assets/NOTICES.Z\`, which
+travels with it. \`build-plugin.js\` copies this file and \`vst3sdk/LICENSE.txt\` into each
+bundle's \`Contents/Resources\`.
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 `;

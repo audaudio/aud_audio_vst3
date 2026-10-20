@@ -191,8 +191,26 @@ bool parseSettings(const std::string& configText, const std::string& document,
   if (!parse(configText, "plugin.json", &config, error) ||
       !schemaOf(config, "plugin.json", error) ||
       !stringOf(config, "name", "plugin.json", true, &out->name, error) ||
-      !stringOf(config, "editor", "plugin.json", false, &out->editor, error)) {
+      !stringOf(config, "editor", "plugin.json", false, &out->editor, error) ||
+      !stringOf(config, "appGroup", "plugin.json", false, &out->appGroup,
+                error)) {
     return false;
+  }
+  if (const Json* size = config.find("editorSize")) {
+    if (!size->isObject()) return fail(error, "editorSize is no object");
+    const std::pair<const char*, double*> fields[] = {
+        {"width", &out->editorWidth},
+        {"height", &out->editorHeight},
+        {"minWidth", &out->editorMinWidth},
+        {"minHeight", &out->editorMinHeight}};
+    for (const auto& [key, target] : fields) {
+      const Json* value = size->find(key);
+      if (value == nullptr) continue;
+      if (!value->isNumber() || value->number < 100 || value->number > 8000) {
+        return fail(error, std::string("editorSize.") + key + " is no size");
+      }
+      *target = value->number;
+    }
   }
   if (const Json* content = config.find("content")) {
     if (!content->isArray()) return fail(error, "content is no list");

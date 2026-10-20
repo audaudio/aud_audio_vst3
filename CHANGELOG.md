@@ -21,7 +21,19 @@
 - Add a REAPER test of an installed plugin (ticket 37)
 
 - scripts/reaper-test.js and scripts/reaper/test.lua: found, rendered offline per preset, played live, preset restored with the project
+
 - The REAPER scenarios of the spike go
+
+- Add the Flutter editor of the VST3 shell (ticket 37)
+
+- One editor process per plugin build, one Flutter view per instance (plugin-003 S)
+- Socket pair on fd 3 and app group Mach names, so a sandboxed editor connects
+- AudShellFd reads and writes the inherited socket through FFI
+- Protocol 2: presets in the welcome, preset changes, MIDI and preset choice from the editor
+- Editor MIDI plays in the graph and goes to the DAW on a MIDI output bus
+- editor, appGroup and editorSize in plugin.json; build-plugin.js --editor copies the app
+- AUD_VST3_LOG collects plugin and editor lines; REAPER test shows the editor
+- Spike editor app and its remote view removed
 
 ## 0.1.0 - 2026-10-11
 

@@ -47,10 +47,16 @@ std::string contentDirectory(const std::vector<std::string>& locations,
 std::string containingApp(const std::string& path);
 
 // #############################################################################
-// Logs `message` to the unified log under the subsystem of the plugin; the
-// realtime thread never calls it.
+// Logs `message` to the unified log under the subsystem of the plugin, and
+// to the file AUD_VST3_LOG names when a test sets it; the realtime thread
+// never calls it.
 void logInfo(const std::string& message);
 void logError(const std::string& message);
+
+// #############################################################################
+// The file AUD_VST3_LOG names, where a test wants the plugin's and the
+// editor's lines; empty without it.
+std::string logFile();
 
 }  // namespace aud_vst3
 

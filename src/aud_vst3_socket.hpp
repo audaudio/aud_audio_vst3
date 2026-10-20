@@ -7,7 +7,11 @@
 // The plugin's end of the shell protocol (ticket 24, decision 3 of the plan
 // review of ticket 23): a Unix domain socket, one connection at a time,
 // frames of a 4-byte little-endian length and UTF-8 JSON - the framing of
-// AudShellCodec in lib/src/aud_shell_codec.dart.
+// AudShellCodec in lib/src/aud_shell_codec.dart. The connection is one end
+// of a socket pair whose other end the editor inherits when the plugin
+// starts it (connectPair, ticket 37) - a sandboxed editor reaches no socket
+// file of the DAW -, or a connection accepted on a socket file (start, the
+// spike of ticket 24).
 //
 // One IPC thread per server accepts, reads and writes. Every connection
 // has an id; received messages and the end of a connection go to the
@@ -70,6 +74,17 @@ class SocketServer {
   bool start(const std::string& directory);
 
   // ...........................................................................
+  // Starts the IPC thread without a socket file, for connectPair(); false
+  // when the thread's wake pipe cannot be made.
+  bool startPaired();
+
+  // ...........................................................................
+  // [any thread] Makes a socket pair, takes one end as the new connection -
+  // the current one ends - and returns the other end for the editor, which
+  // the caller closes once the editor inherited it; -1 on a failure.
+  int connectPair();
+
+  // ...........................................................................
   // [any thread] Queues a message for the current connection once it is
   // authenticated; until then the message goes nowhere. A droppable
   // message is dropped above the soft limit; above the hard limit the
@@ -104,6 +119,7 @@ class SocketServer {
   void loop();
   void wake();
   void accept();
+  void adopt(int fd);
   bool readFrom(int fd);
   bool parseFrames();
   void closeConnection();
@@ -125,6 +141,7 @@ class SocketServer {
   uint64_t authenticated_ = 0;   // the authenticated connection, 0 for none
   uint64_t disconnectRequested_ = 0;
   uint64_t lastConnection_ = 0;  // IPC thread only
+  int pendingFd_ = -1;           // the end connectPair() hands the thread
 
   std::atomic<bool> stopping_{false};
   std::atomic<uint64_t> dropped_{0};

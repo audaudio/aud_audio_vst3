@@ -25,7 +25,11 @@
 //   node scripts/build-plugin.js --config <plugin.json>
 //       [--package-config <.dart_tool/package_config.json>]
 //       [--out <directory>] [--sign <identity>] [--install]
-//       [--rtsan] [--watchdog]
+//       [--editor <app>] [--rtsan] [--watchdog]
+//
+// --editor puts the built editor app - signed by its own build with the App
+// Sandbox and the app group - into Contents/Helpers under the name
+// plugin.json gives it as `editor`; the bundle is signed around it.
 
 'use strict';
 
@@ -44,16 +48,28 @@ const exampleConfig = path.join(root, 'example', 'plugin', 'plugin.json');
 // The shell's own sources.
 const shellSources = [
   'src/aud_vst3_bundle.mm',
+  'src/aud_vst3_editor.mm',
   'src/aud_vst3_engine.cpp',
   'src/aud_vst3_factory.cpp',
   'src/aud_vst3_midi.cpp',
+  'src/aud_vst3_objc.mm',
   'src/aud_vst3_param.cpp',
   'src/aud_vst3_plugin.cpp',
   'src/aud_vst3_settings.cpp',
+  'src/aud_vst3_socket.cpp',
+  'src/aud_vst3_surfaces.mm',
   'src/aud_vst3_transport.cpp',
 ];
 
-const frameworks = ['AppKit', 'CoreAudio', 'CoreFoundation', 'Foundation'];
+const frameworks = [
+  'AppKit',
+  'CoreAudio',
+  'CoreFoundation',
+  'CoreGraphics',
+  'Foundation',
+  'IOSurface',
+  'QuartzCore',
+];
 
 // The machine every object and binary is built for.
 const targetFlags = ['-arch', 'arm64', '-mmacosx-version-min=12.0'];
@@ -154,6 +170,7 @@ function parseArgs(argv) {
     packageConfig: path.join(root, '.dart_tool', 'package_config.json'),
     out: path.join(root, 'build', 'vst3'),
     sign: '-',
+    editor: null,
     install: false,
     rtsan: false,
     watchdog: false,
@@ -164,6 +181,7 @@ function parseArgs(argv) {
     else if (arg === '--package-config') options.packageConfig = path.resolve(argv[++i]);
     else if (arg === '--out') options.out = path.resolve(argv[++i]);
     else if (arg === '--sign') options.sign = argv[++i];
+    else if (arg === '--editor') options.editor = path.resolve(argv[++i]);
     else if (arg === '--install') options.install = true;
     else if (arg === '--rtsan') options.rtsan = true;
     else if (arg === '--watchdog') options.watchdog = true;
@@ -571,6 +589,14 @@ async function build(options) {
         fs.copyFileSync(file, path.join(notices, `${recipe.name}${i === 0 ? '' : `-${i}`}-${path.basename(file)}`));
       }
     });
+  }
+  if (options.editor) {
+    if (!config.editor) throw new Error(`${options.config} names no editor`);
+    const helpers = path.join(contents, 'Helpers');
+    fs.mkdirSync(helpers, { recursive: true });
+    // The editor keeps its own signature with its entitlements; the
+    // bundle's seals it.
+    run('ditto', [options.editor, path.join(helpers, config.editor)]);
   }
   run('codesign', [
     '--force',

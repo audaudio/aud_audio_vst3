@@ -6,18 +6,23 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'aud_shell_codec.dart';
+import 'aud_shell_fd.dart';
 import 'aud_shell_message.dart';
 
 // #############################################################################
-/// The editor's end of the shell protocol: connects to the Unix domain
-/// socket the plugin listens on, introduces itself with the token and
-/// exchanges [AudShellMessage]s. The stream ends when the plugin closes the
-/// socket - the editor then quits.
+/// The editor's end of the shell protocol: exchanges [AudShellMessage]s
+/// with the plugin, over the socket pair whose end the plugin handed the
+/// editor as a file descriptor when it started it ([AudShellClient.fromFd],
+/// ticket 37), or over a Unix domain socket the plugin listens on
+/// ([AudShellClient.connect], the spike of ticket 24). It introduces itself
+/// with the token the plugin gave it. The stream ends when the plugin ends
+/// the connection - the editor then quits.
 class AudShellClient {
-  AudShellClient._(this._socket) {
-    _subscription = _socket
+  AudShellClient._(Stream<Uint8List> input, this._write, this._close) {
+    _subscription = input
         .transform(AudShellCodec.decoder())
         .listen(
           _messages.add,
@@ -36,12 +41,24 @@ class AudShellClient {
       InternetAddress(path, type: InternetAddressType.unix),
       0,
     );
-    final client = AudShellClient._(socket);
+    final client = AudShellClient._(socket, socket.add, () async {
+      socket.destroy();
+    });
     client.send(hello);
     return client;
   }
 
-  final Socket _socket;
+  // ...........................................................................
+  /// Talks over the inherited socket [fd] and sends [hello].
+  static Future<AudShellClient> fromFd(int fd, AudShellHello hello) async {
+    final channel = await AudShellFd.open(fd);
+    final client = AudShellClient._(channel.input, channel.add, channel.close);
+    client.send(hello);
+    return client;
+  }
+
+  final void Function(List<int> bytes) _write;
+  final Future<void> Function() _close;
   final _messages = StreamController<AudShellMessage>.broadcast(sync: true);
   late final StreamSubscription<AudShellMessage> _subscription;
 
@@ -50,14 +67,13 @@ class AudShellClient {
 
   // ...........................................................................
   /// Sends [message].
-  void send(AudShellMessage message) =>
-      _socket.add(AudShellCodec.encode(message));
+  void send(AudShellMessage message) => _write(AudShellCodec.encode(message));
 
   // ...........................................................................
   /// Closes the connection in both directions at once.
   Future<void> close() async {
-    // Destroyed first: the decoder waits for the socket and ends with it.
-    _socket.destroy();
+    // Ended first: the decoder waits for the input and ends with it.
+    await _close();
     await _subscription.cancel();
     if (!_messages.isClosed) await _messages.close();
   }

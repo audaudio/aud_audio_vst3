@@ -99,6 +99,12 @@ class Client {
     connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address));
   }
 
+  // Takes `fd`, the editor's end of a socket pair.
+  explicit Client(int fd) : fd_(fd) {
+    const int on = 1;
+    setsockopt(fd_, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+  }
+
   // Ends the connection.
   ~Client() { close(fd_); }
 
@@ -280,6 +286,28 @@ int main() {
         server->send(message("param"));
         expectEqual(client.receive(kTimeoutMs),
                     std::string(R"({"type":"param"})"));
+      });
+    });
+    group("connectPair()", [&] {
+      test("hands the editor a connected end, a new pair replaces it", [&] {
+        Events events;
+        SocketServer server(events.onMessage(), events.onState());
+        expectEqual(server.startPaired(), true);
+        expectEqual(server.path(), std::string());
+        const int first = server.connectPair();
+        expectEqual(first >= 0, true);
+        Client editor(first);
+        expectEqual(events.wait(1), Strings{"started 1"});
+        editor.write(frameOf(hello));
+        expectEqual(events.wait(2), (Strings{"started 1", hello}));
+        server.authenticate(1);
+        server.send(message("show"));
+        expectEqual(editor.receive(kTimeoutMs), std::string(R"({"type":"show"})"));
+        // A new editor: the old connection ends, the new one starts.
+        Client next(server.connectPair());
+        expectEqual(events.wait(4),
+                    (Strings{"started 1", hello, "ended 1", "started 2"}));
+        expectEqual(editor.ended(), true);
       });
     });
   });

@@ -85,6 +85,30 @@ AudEvent controlChangeEvent(uint32_t channel, uint32_t cc, uint32_t value,
 }
 
 // #############################################################################
+AudEvent midiEvent(uint32_t status, uint32_t data1, uint32_t data2,
+                   uint32_t offset) {
+  const uint32_t word = aud_ump_midi1_word(0, status & 0xFF, data1, data2);
+  return aud_event_ump(&word, 1, offset, 0);
+}
+
+// #############################################################################
+uint32_t midiDataBytes(uint32_t status) {
+  switch (status & 0xF0) {
+    case 0x80:
+    case 0x90:
+    case 0xA0:
+    case 0xB0:
+    case 0xE0:
+      return 2;
+    case 0xC0:
+    case 0xD0:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+// #############################################################################
 AudEvent midiParamEvent(uint32_t channel, uint32_t controller,
                         double normalized, uint32_t offset) {
   if (controller == kMidiPitchBend) {

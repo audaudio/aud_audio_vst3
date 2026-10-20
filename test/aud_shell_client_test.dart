@@ -8,8 +8,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:aud_audio_core/aud_audio_core.dart';
 import 'package:aud_audio_vst3/aud_audio_vst3.dart';
 import 'package:test/test.dart';
+
+import 'socket_pair.dart';
 
 void main() {
   group('AudShellClient', () {
@@ -106,6 +109,35 @@ void main() {
         await received.cancel();
         plugin.destroy();
       });
+    });
+  });
+
+  group('AudShellClient.fromFd', () {
+    test('sends the hello and receives framed messages', () async {
+      final (plugin, editor) = socketPair();
+      final client = await AudShellClient.fromFd(
+        editor,
+        const AudShellHello(token: 'abc', instance: 3, pid: 42),
+      );
+      final hello = AudShellCodec.encode(
+        const AudShellHello(token: 'abc', instance: 3, pid: 42),
+      );
+      expect(readSome(plugin), hello);
+      final message = client.messages.first;
+      writeAll(plugin, AudShellCodec.encode(const AudShellShow(instance: 3)));
+      expect(
+        await message.timeout(const Duration(seconds: 5)),
+        isA<AudShellShow>(),
+      );
+      client.send(
+        const AudShellCommand(
+          AudSetParamCommand(node: 1, paramIndex: 0, value: 2),
+          instance: 3,
+        ),
+      );
+      expect(readSome(plugin), isNotEmpty);
+      await client.close();
+      closeFd(plugin);
     });
   });
 }

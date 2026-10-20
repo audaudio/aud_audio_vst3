@@ -27,7 +27,9 @@ const char* const kConfig = R"({
   "parameters": [{ "node": "delay", "param": "mix", "name": "Delay Mix" },
                  { "node": "out", "param": "master" }],
   "controls": [{ "id": "slider", "name": "Slider", "channel": 0, "cc": 74,
-                 "default": 0.25 }]
+                 "default": 0.25 }],
+  "editor": "Editor.app", "appGroup": "TEAM.com.a",
+  "editorSize": { "width": 900, "minHeight": 400 }
 })";
 
 const char* const kDocument = R"({"schema": 1, "nodes": []})";
@@ -68,6 +70,11 @@ int main() {
       expectEqual(settings.presets[0].nodes[0].first, std::string("x"));
       expectEqual(settings.presetIndex("a"), 0);
       expectEqual(settings.presetIndex("c"), -1);
+      expectEqual(settings.editor, std::string("Editor.app"));
+      expectEqual(settings.appGroup, std::string("TEAM.com.a"));
+      expectNear(settings.editorWidth, 900, 0);
+      expectNear(settings.editorHeight, 640, 0);
+      expectNear(settings.editorMinHeight, 400, 0);
     });
     test("refuse what is wrong, with a reason", [] {
       const auto refuses = [](const char* config, const char* presets) {

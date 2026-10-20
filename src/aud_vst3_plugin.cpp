@@ -57,6 +57,8 @@ struct PresetValues {
   std::vector<std::pair<uint32_t, double>> values;
 };
 
+std::atomic<uint32_t> nextInstance{1};
+
 std::string titleOf(uint32_t channel, uint32_t controller) {
   const std::string suffix = " (channel " + std::to_string(channel + 1) + ")";
   if (controller == kMidiPitchBend) return "Pitch Bend" + suffix;
@@ -76,7 +78,7 @@ uint32_t presetParamId() {
 // Plugin
 
 // .............................................................................
-Plugin::Plugin() : clock_(true) {}
+Plugin::Plugin() : instance_(nextInstance.fetch_add(1)), clock_(true) {}
 
 // .............................................................................
 Plugin::~Plugin() = default;
@@ -107,6 +109,8 @@ tresult PLUGIN_API Plugin::initialize(FUnknown* context) {
   setVoiceBudget(settings_.voiceBudget);
   addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
   addEventInput(STR16("MIDI In"), kMidiChannels);
+  // What the editor plays goes to the DAW, which records it on a MIDI track.
+  addEventOutput(STR16("MIDI Out"), kMidiChannels);
   engine_ = std::make_unique<Engine>();
   if (!engine_->open(settings_.document, content, kDefaultSampleRate,
                      kDefaultMaxFrames, &error)) {
@@ -207,6 +211,12 @@ tresult PLUGIN_API Plugin::terminate() {
     std::this_thread::yield();
   }
   *alive_ = false;
+  for (auto& entry : openEdits_) {
+    for (const uint32_t id : entry.second) endEdit(id);
+  }
+  openEdits_.clear();
+  editorState_.reset();
+  observers_.clear();
   engine_.reset();
   return SingleComponentEffect::terminate();
 }
@@ -235,7 +245,11 @@ void Plugin::presetApplied(Engine& engine, uint32_t index) {
                                                    values->presetNormalized);
     for (const auto& [id, value] : values->values) {
       plugin->EditControllerEx1::setParamNormalized(id, value);
+      for (PluginObserver* observer : plugin->observers_) {
+        observer->paramChanged(id, value);
+      }
     }
+    plugin->notifyPreset(values->preset);
     if (IComponentHandler* handler = plugin->getComponentHandler()) {
       handler->restartComponent(kParamValuesChanged);
     }
@@ -286,12 +300,16 @@ tresult PLUGIN_API Plugin::setState(IBStream* state) {
         presetParamId(),
         count > 1 ? static_cast<double>(index) / static_cast<double>(count - 1)
                   : 0);
+    notifyPreset(static_cast<uint32_t>(index));
   }
   for (const auto& [id, plain] : restored.params) {
     const ParamMapping* m = mapping(id);
     if (m == nullptr) continue;
     engine_->setParam(id, plain);
     EditControllerEx1::setParamNormalized(id, m->toNormalized(plain));
+    for (PluginObserver* observer : observers_) {
+      observer->paramChanged(id, m->toNormalized(plain));
+    }
   }
   for (const auto& [id, value] : restored.controls) {
     for (uint32_t i = 0; i < settings_.controls.size(); ++i) {
@@ -401,6 +419,7 @@ tresult PLUGIN_API Plugin::process(ProcessData& data) {
       addEvent(controlChangeEvent(control.channel, control.cc,
                                   sevenBits(change.value), 0));
     }
+    takeEditorMidi(data);
     takeParams(data, *engine, frames);
     takeEvents(data, frames);
     if (frames > 0 && data.numOutputs >= 1 &&
@@ -426,6 +445,64 @@ tresult PLUGIN_API Plugin::process(ProcessData& data) {
   }
   processing_.fetch_sub(1, std::memory_order_release);
   return engine != nullptr ? kResultOk : kResultFalse;
+}
+
+// The messages the editor played: to the graph at the block's start, and
+// to the DAW through the event output.
+void Plugin::takeEditorMidi(ProcessData& data) AUD_VST3_NONBLOCKING {
+  EditorMidi m{};
+  while (editorMidi_.pop(m)) {
+    addEvent(midiEvent(m.status, m.data1, m.data2, 0));
+    IEventList* out = data.outputEvents;
+    if (out == nullptr) continue;
+    const int16 channel = static_cast<int16>(m.status & 0x0F);
+    Event e{};
+    e.busIndex = 0;
+    e.sampleOffset = 0;
+    switch (m.status & 0xF0) {
+      case 0x90:
+        if (m.data2 > 0) {
+          e.type = Event::kNoteOnEvent;
+          e.noteOn.channel = channel;
+          e.noteOn.pitch = m.data1;
+          e.noteOn.velocity = m.data2 / 127.0f;
+          e.noteOn.noteId = -1;
+          break;
+        }
+        [[fallthrough]];
+      case 0x80:
+        e.type = Event::kNoteOffEvent;
+        e.noteOff.channel = channel;
+        e.noteOff.pitch = m.data1;
+        e.noteOff.velocity = (m.status & 0xF0) == 0x80 ? m.data2 / 127.0f : 0;
+        e.noteOff.noteId = -1;
+        break;
+      case 0xA0:
+        e.type = Event::kPolyPressureEvent;
+        e.polyPressure.channel = channel;
+        e.polyPressure.pitch = m.data1;
+        e.polyPressure.pressure = m.data2 / 127.0f;
+        e.polyPressure.noteId = -1;
+        break;
+      case 0xB0:
+      case 0xD0:
+      case 0xE0:
+        e.type = Event::kLegacyMIDICCOutEvent;
+        e.midiCCOut.channel = static_cast<int8>(channel);
+        e.midiCCOut.controlNumber =
+            (m.status & 0xF0) == 0xB0   ? m.data1
+            : (m.status & 0xF0) == 0xD0 ? static_cast<uint8>(kAfterTouch)
+                                        : static_cast<uint8>(kPitchBend);
+        e.midiCCOut.value = static_cast<int8>(
+            (m.status & 0xF0) == 0xB0 ? m.data2 : m.data1);
+        e.midiCCOut.value2 =
+            static_cast<int8>((m.status & 0xF0) == 0xE0 ? m.data2 : 0);
+        break;
+      default:
+        continue;
+    }
+    out->addEvent(e);
+  }
 }
 
 void Plugin::addEvent(const AudEvent& event) AUD_VST3_NONBLOCKING {
@@ -566,9 +643,112 @@ uint32 PLUGIN_API Plugin::getLatencySamples() { return latency_; }
 uint32 PLUGIN_API Plugin::getTailSamples() { return tail_ > 0 ? tail_ : kNoTail; }
 
 IPlugView* PLUGIN_API Plugin::createView(FIDString name) {
-  // The host's generic view until the editor arrives (phase D of ticket 37).
-  (void)name;
-  return nullptr;
+  // Without an editor app the DAW shows its generic view.
+  if (name == nullptr || std::strcmp(name, ViewType::kEditor) != 0 ||
+      settings_.editor.empty() || engine_ == nullptr) {
+    return nullptr;
+  }
+  return createEditorView(this);
+}
+
+tresult PLUGIN_API Plugin::setParamNormalized(ParamID tag, ParamValue value) {
+  const tresult result = EditControllerEx1::setParamNormalized(tag, value);
+  if (tag == presetParamId()) {
+    const int32_t index = presetOf(value);
+    if (index >= 0) notifyPreset(static_cast<uint32_t>(index));
+    return result;
+  }
+  if (mapping(tag) != nullptr || controlIndex(tag) >= 0) {
+    for (PluginObserver* observer : observers_) observer->paramChanged(tag, value);
+  }
+  return result;
+}
+
+// .............................................................................
+void Plugin::notifyPreset(uint32_t index) {
+  for (PluginObserver* observer : observers_) observer->presetChanged(index);
+}
+
+// .............................................................................
+void Plugin::addObserver(PluginObserver* observer) {
+  observers_.push_back(observer);
+}
+
+// .............................................................................
+void Plugin::removeObserver(PluginObserver* observer) {
+  observers_.erase(std::remove(observers_.begin(), observers_.end(), observer),
+                   observers_.end());
+}
+
+// .............................................................................
+void Plugin::editBegin(uint32_t id, const PluginObserver* owner) {
+  if (openEdits_[owner].insert(id).second) beginEdit(id);
+}
+
+// .............................................................................
+void Plugin::edit(uint32_t id, double normalized, PluginObserver* origin) {
+  EditControllerEx1::setParamNormalized(id, normalized);
+  performEdit(id, normalized);
+  for (PluginObserver* observer : observers_) {
+    if (observer != origin) observer->paramChanged(id, normalized);
+  }
+}
+
+// .............................................................................
+void Plugin::editEnd(uint32_t id, const PluginObserver* owner) {
+  const auto it = openEdits_.find(owner);
+  if (it == openEdits_.end() || it->second.erase(id) == 0) return;
+  if (it->second.empty()) openEdits_.erase(it);
+  endEdit(id);
+}
+
+// .............................................................................
+void Plugin::endEdits(const PluginObserver* owner) {
+  const auto it = openEdits_.find(owner);
+  if (it == openEdits_.end()) return;
+  const std::set<uint32_t> ids = it->second;
+  openEdits_.erase(it);
+  for (const uint32_t id : ids) endEdit(id);
+}
+
+// .............................................................................
+void Plugin::selectPreset(uint32_t index, PluginObserver* origin) {
+  const size_t count = settings_.presets.size();
+  if (engine_ == nullptr || index >= count) return;
+  const double normalized =
+      count > 1 ? static_cast<double>(index) / static_cast<double>(count - 1) : 0;
+  preset_.store(static_cast<int32_t>(index));
+  engine_->requestPreset(index);
+  // The DAW records the choice like a program change of its own.
+  EditControllerEx1::setParamNormalized(presetParamId(), normalized);
+  beginEdit(presetParamId());
+  performEdit(presetParamId(), normalized);
+  endEdit(presetParamId());
+  for (PluginObserver* observer : observers_) {
+    if (observer != origin) observer->presetChanged(index);
+  }
+}
+
+// .............................................................................
+bool Plugin::editorMidi(const std::vector<uint8_t>& bytes) {
+  bool all = true;
+  size_t i = 0;
+  while (i < bytes.size()) {
+    const uint8_t status = bytes[i];
+    const uint32_t count = midiDataBytes(status);
+    // A data byte without its status, or a system message: skipped.
+    if (count == 0) {
+      ++i;
+      continue;
+    }
+    // A message cut off at the end.
+    if (i + count >= bytes.size()) break;
+    const uint8_t data1 = bytes[i + 1] & 0x7F;
+    const uint8_t data2 = count == 2 ? bytes[i + 2] & 0x7F : 0;
+    if (!editorMidi_.push({status, data1, data2})) all = false;
+    i += 1 + count;
+  }
+  return all;
 }
 
 tresult PLUGIN_API Plugin::getMidiControllerAssignment(int32 busIndex,

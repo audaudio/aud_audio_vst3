@@ -8,7 +8,7 @@ import 'package:aud_audio_core/aud_audio_core.dart';
 
 /// The version of the shell protocol that [AudShellHello] and
 /// [AudShellWelcome] carry.
-const int audShellProtocolVersion = 1;
+const int audShellProtocolVersion = 2;
 
 // #############################################################################
 /// A message of the shell protocol between a plugin shell and its editor
@@ -33,6 +33,9 @@ sealed class AudShellMessage {
         'place' => AudShellPlace.fromJson(json),
         'cursor' => AudShellCursor.fromJson(json),
         'probe' => AudShellProbe.fromJson(json),
+        'preset' => AudShellPreset.fromJson(json),
+        'selectPreset' => AudShellSelectPreset.fromJson(json),
+        'midi' => AudShellMidi.fromJson(json),
         'show' => AudShellShow(instance: _instance(json)),
         'hide' => AudShellHide(instance: _instance(json)),
         'remove' => AudShellRemove(instance: _instance(json)),
@@ -203,6 +206,8 @@ final class AudShellWelcome extends AudShellMessage {
     required this.height,
     required this.scale,
     this.version = audShellProtocolVersion,
+    this.presets = const [],
+    this.preset = -1,
   });
 
   /// A message from [toJson].
@@ -218,7 +223,19 @@ final class AudShellWelcome extends AudShellMessage {
         height: _double(json, 'height'),
         scale: _double(json, 'scale'),
         version: _int(json, 'version'),
+        presets: [
+          for (final preset in json['presets'] as List<Object?>? ?? const [])
+            AudShellPresetInfo.fromJson(preset! as Map<String, Object?>),
+        ],
+        preset: (json['preset'] as num?)?.toInt() ?? -1,
       );
+
+  /// The presets of the plugin, in the order of its program list (version
+  /// 2); empty for a plugin without.
+  final List<AudShellPresetInfo> presets;
+
+  /// The index of the preset that plays, -1 for none.
+  final int preset;
 
   /// The name of the graph document.
   final String name;
@@ -248,6 +265,99 @@ final class AudShellWelcome extends AudShellMessage {
     'height': height,
     'scale': scale,
     'version': version,
+    'presets': [for (final preset in presets) preset.toJson()],
+    'preset': preset,
+  };
+}
+
+// #############################################################################
+/// A preset of the plugin as the welcome lists it.
+final class AudShellPresetInfo {
+  /// Creates the info.
+  const AudShellPresetInfo({required this.id, required this.name});
+
+  /// An info from [toJson].
+  factory AudShellPresetInfo.fromJson(Map<String, Object?> json) =>
+      AudShellPresetInfo(
+        id: json['id']! as String,
+        name: json['name']! as String,
+      );
+
+  /// The id of the preset.
+  final String id;
+
+  /// The name the DAW shows.
+  final String name;
+
+  /// The info as JSON.
+  Map<String, Object?> toJson() => {'id': id, 'name': name};
+}
+
+// #############################################################################
+/// From the plugin: the preset at [index] plays now - chosen in the DAW, by
+/// its automation or by a restored project.
+final class AudShellPreset extends AudShellMessage {
+  /// Creates the message.
+  const AudShellPreset(this.index, {super.instance});
+
+  /// A message from [toJson].
+  factory AudShellPreset.fromJson(Map<String, Object?> json) =>
+      AudShellPreset(_int(json, 'index'), instance: _instance(json));
+
+  /// The index of the preset in the welcome's list.
+  final int index;
+
+  @override
+  Map<String, Object?> toJson() => {
+    'type': 'preset',
+    'instance': instance,
+    'index': index,
+  };
+}
+
+// #############################################################################
+/// To the plugin: the editor chose the preset at [index]; the plugin plays
+/// it and tells the DAW, which records it like a program change.
+final class AudShellSelectPreset extends AudShellMessage {
+  /// Creates the message.
+  const AudShellSelectPreset(this.index, {super.instance});
+
+  /// A message from [toJson].
+  factory AudShellSelectPreset.fromJson(Map<String, Object?> json) =>
+      AudShellSelectPreset(_int(json, 'index'), instance: _instance(json));
+
+  /// The index of the preset in the welcome's list.
+  final int index;
+
+  @override
+  Map<String, Object?> toJson() => {
+    'type': 'selectPreset',
+    'instance': instance,
+    'index': index,
+  };
+}
+
+// #############################################################################
+/// To the plugin: MIDI 1.0 bytes the editor played, e.g. the notes of its
+/// play surface. The plugin plays them with its next block and sends them
+/// to the DAW through its event output, so that a MIDI track records them.
+final class AudShellMidi extends AudShellMessage {
+  /// Creates the message.
+  const AudShellMidi(this.bytes, {super.instance});
+
+  /// A message from [toJson].
+  factory AudShellMidi.fromJson(Map<String, Object?> json) => AudShellMidi([
+    for (final byte in json['bytes']! as List<Object?>) (byte! as num).toInt(),
+  ], instance: _instance(json));
+
+  /// Complete MIDI 1.0 messages with their status bytes.
+  final List<int> bytes;
+
+  @override
+  Map<String, Object?> toJson() => {
+    'type': 'midi',
+    'instance': instance,
+    'bytes': bytes,
   };
 }
 

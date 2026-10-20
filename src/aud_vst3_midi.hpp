@@ -72,6 +72,18 @@ AudEvent controlChangeEvent(uint32_t channel, uint32_t cc, uint32_t value,
                             uint32_t offset);
 
 // #############################################################################
+// The event of a MIDI 1.0 channel voice message: `status` with its channel,
+// one or two data bytes.
+AudEvent midiEvent(uint32_t status, uint32_t data1, uint32_t data2,
+                   uint32_t offset);
+
+// #############################################################################
+// The bytes a channel voice message with `status` carries after it: 1 for
+// program change and channel pressure, 2 for the others, 0 for no channel
+// voice status.
+uint32_t midiDataBytes(uint32_t status);
+
+// #############################################################################
 // The event of a hidden MIDI parameter's value: a control change, channel
 // pressure, or a pitch bend of 14 bits whose centre is the normalized 0.5.
 AudEvent midiParamEvent(uint32_t channel, uint32_t controller,
