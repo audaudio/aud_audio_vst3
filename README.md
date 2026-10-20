@@ -118,7 +118,10 @@ example plugin and runs the test host on it, or on the bundle it is given
 (`--wav <dir>`, `--presets n`, `--realtime-seconds s`). `validate.js` runs
 the SDK's validator on the bundles of `build/vst3` or on the given ones.
 `test-native.js` builds and runs the unit tests of the native code in
-`test/native`. `vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
+`test/native`. `reaper-test.js` tests an installed plugin in REAPER: found,
+rendered offline with presets (`--render 0,13,27 --presets 28`), played
+live, its preset restored with the project (`--plugin <name>`).
+`vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
 `src/third_party/vst3sdk` and writes `src/third_party/NOTICES.md`.
 
 Until `aud_audio_ui_controls` 0.1.0 is released, the editor builds against

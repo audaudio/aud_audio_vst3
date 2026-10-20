@@ -7,11 +7,21 @@
 - Add the VST3 shell that plays an app's graph document (ticket 37)
 
 - plugin.json, a graph document and presets of an app configure the shell
+
 - The node packages it names are compiled in by recipes, symbols hidden
+
 - Presets as program list, listed graph parameters, MIDI controls
+
 - The DAW's MIDI with IMidiMapping, its transport running free when stopped
+
 - State as JSON without paths; offline blocks wait for the loads
+
 - A test host, an example plugin and native tests; the spike's probes go
+
+- Add a REAPER test of an installed plugin (ticket 37)
+
+- scripts/reaper-test.js and scripts/reaper/test.lua: found, rendered offline per preset, played live, preset restored with the project
+- The REAPER scenarios of the spike go
 
 ## 0.1.0 - 2026-10-11
 
