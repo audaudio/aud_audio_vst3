@@ -745,10 +745,49 @@ bool Plugin::editorMidi(const std::vector<uint8_t>& bytes) {
     if (i + count >= bytes.size()) break;
     const uint8_t data1 = bytes[i + 1] & 0x7F;
     const uint8_t data2 = count == 2 ? bytes[i + 2] & 0x7F : 0;
-    if (!editorMidi_.push({status, data1, data2})) all = false;
+    if (editorMidi_.push({status, data1, data2})) {
+      followEditorNote(status, data1, data2);
+    } else {
+      all = false;
+    }
     i += 1 + count;
   }
   return all;
+}
+
+// Keeps editorNotes_ in step with a message the editor played.
+void Plugin::followEditorNote(uint8_t status, uint8_t data1, uint8_t data2) {
+  const size_t channel = status & 0x0F;
+  switch (status & 0xF0) {
+    case 0x90:
+      editorNotes_.set(channel * 128 + data1, data2 > 0);
+      break;
+    case 0x80:
+      editorNotes_.reset(channel * 128 + data1);
+      break;
+    case 0xB0:
+      // All sound off, all notes off.
+      if (data1 == 120 || data1 == 123) {
+        for (size_t key = 0; key < 128; ++key) editorNotes_.reset(channel * 128 + key);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+size_t Plugin::releaseEditorNotes() {
+  size_t released = 0;
+  for (size_t note = 0; note < editorNotes_.size(); ++note) {
+    if (!editorNotes_.test(note)) continue;
+    const uint8_t status = static_cast<uint8_t>(0x80 | (note / 128));
+    const uint8_t key = static_cast<uint8_t>(note % 128);
+    // A full queue keeps the note: the next release tries again.
+    if (!editorMidi_.push({status, key, 0})) break;
+    editorNotes_.reset(note);
+    released += 1;
+  }
+  return released;
 }
 
 tresult PLUGIN_API Plugin::getMidiControllerAssignment(int32 busIndex,

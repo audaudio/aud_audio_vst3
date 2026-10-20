@@ -286,6 +286,9 @@ class EditorHost : public std::enable_shared_from_this<EditorHost> {
   void handle(const aud::Json& json, uint64_t connection);
   void connectionLost(uint64_t connection);
   void exited(pid_t pid, int status);
+  // Ends the notes the editor holds in every instance: its note offs never
+  // come.
+  void releaseNotes();
   void endGestures();
   void scheduleRestart();
   void killLater(pid_t pid);
@@ -991,6 +994,7 @@ void EditorHost::killLater(pid_t pid) {
 
 void EditorHost::stopProcess() {
   endGestures();
+  releaseNotes();
   ready_ = false;
   connection_ = 0;
   token_.clear();
@@ -1050,10 +1054,21 @@ void EditorHost::exited(pid_t pid, int status) {
   if (!ready_) ++failedStarts_;
   ready_ = false;
   endGestures();
+  releaseNotes();
   if (server_ != nullptr && connection_ != 0) server_->disconnect(connection_);
   connection_ = 0;
   // A crashed editor of an open view comes back.
   if (anyView()) scheduleRestart();
+}
+
+void EditorHost::releaseNotes() {
+  for (const auto& entry : clients_) {
+    const size_t released = entry.second.plugin->releaseEditorNotes();
+    if (released > 0) {
+      logInfo("Instance " + std::to_string(entry.first) + ": " + std::to_string(released) +
+              " notes of the editor end without it");
+    }
+  }
 }
 
 void EditorHost::handle(const aud::Json& json, uint64_t connection) {

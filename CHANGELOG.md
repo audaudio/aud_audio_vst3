@@ -53,9 +53,18 @@
 - Add frame diagnostics to the VST3 editor view (ticket 37)
 
 - The view logs when it shows or hides, with the window's state
+
 - A frame that reaches the view late is logged, at most once a second
+
 - Test host: repeated clicks check that every click redraws
+
 - Test host: --cover, --hold-surfaces and --hold-seconds as a DAW may do
+
+- Add the release of notes the editor still holds (ticket 37)
+
+- The plugin follows the notes the editor plays per channel and key
+- When the editor ends or crashes, its notes end in the graph and the DAW
+- Test host: --resize-steps resizes the view live, --kill-editor ends the editor
 
 ## 0.1.0 - 2026-10-11
 

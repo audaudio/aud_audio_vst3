@@ -25,6 +25,7 @@
 
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <map>
 #include <memory>
 #include <set>
@@ -209,6 +210,12 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   // fit the queue.
   bool editorMidi(const std::vector<uint8_t>& bytes);
 
+  // ...........................................................................
+  // [UI thread] Ends every note the editor holds, with note offs to the
+  // graph and the DAW: the editor ended or crashed, and its note offs never
+  // come. Returns how many it ended.
+  size_t releaseEditorNotes();
+
   // ###########################################################################
   // FUnknown
 
@@ -236,6 +243,7 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   };
 
   void notifyPreset(uint32_t index);
+  void followEditorNote(uint8_t status, uint8_t data1, uint8_t data2);
 
   void addParameters();
   void addMidiParameters();
@@ -273,6 +281,8 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   std::unique_ptr<std::atomic<float>[]> controlValues_;
   AudSpscQueue<ControlChange> controlChanges_{64};
   AudSpscQueue<EditorMidi> editorMidi_{1024};
+  // The notes the editor holds, by channel * 128 + key (UI thread).
+  std::bitset<16 * 128> editorNotes_;
   // The views and their open gestures (UI thread).
   std::vector<PluginObserver*> observers_;
   std::map<const PluginObserver*, std::set<uint32_t>> openEdits_;

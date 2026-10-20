@@ -30,18 +30,23 @@
 // host's window over the editor's own window first, as a DAW's plugin
 // window does. --hold-surfaces keeps every surface the view showed in use,
 // as another process may, for --hold-seconds s (until the end without): the
-// editor has to replace its surfaces to go on.
+// editor has to replace its surfaces to go on. --resize-steps n resizes the
+// view live in n steps: the editor lives on and draws. --kill-editor ends
+// the editor while a note is held: the plugin ends the note itself.
 //
 //   aud_vst3_host <bundle.vst3> [--wav <dir>] [--presets n]
 //     [--realtime-seconds s] [--editor s [--snapshot <png>] [--click x,y]
 //     [--clicks n] [--click-pause s] [--cover] [--hold-surfaces
-//     [--hold-seconds s]]]
+//     [--hold-seconds s]] [--resize-steps n] [--kill-editor]]
 
 #import <Cocoa/Cocoa.h>
 #import <ImageIO/ImageIO.h>
 #import <IOSurface/IOSurface.h>
 #import <QuartzCore/QuartzCore.h>
+#include <libproc.h>
 #include <mach/mach_time.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
@@ -224,14 +229,18 @@ class Instance {
   }
 
   // The notes the plugin sent to the DAW since the last call, as
-  // "channel:pitch" with channels from 1.
-  std::vector<std::string> takeNoteOns() {
+  // "channel:pitch" with channels from 1; the note offs go to `offs`.
+  std::vector<std::string> takeNoteOns(std::vector<std::string>* offs = nullptr) {
     std::vector<std::string> notes;
     for (int32 i = 0; i < output_.getEventCount(); ++i) {
       Event e{};
-      if (output_.getEvent(i, e) == kResultOk && e.type == Event::kNoteOnEvent) {
+      if (output_.getEvent(i, e) != kResultOk) continue;
+      if (e.type == Event::kNoteOnEvent) {
         notes.push_back(std::to_string(e.noteOn.channel + 1) + ":" +
                         std::to_string(e.noteOn.pitch));
+      } else if (e.type == Event::kNoteOffEvent && offs != nullptr) {
+        offs->push_back(std::to_string(e.noteOff.channel + 1) + ":" +
+                        std::to_string(e.noteOff.pitch));
       }
     }
     output_.clear();
@@ -426,11 +435,27 @@ NSEvent* mouseEvent(NSEventType type, NSWindow* window, NSPoint point) {
                             pressure:type == NSEventTypeLeftMouseUp ? 0 : 1];
 }
 
+// The editor process the plugin started, 0 when there is none.
+pid_t editorPid() {
+  pid_t children[64];
+  // The number of children, not of bytes.
+  const int count = proc_listchildpids(getpid(), children, sizeof(children));
+  for (int i = 0; i < count; ++i) {
+    char path[PROC_PIDPATHINFO_MAXSIZE];
+    if (proc_pidpath(children[i], path, sizeof(path)) > 0 &&
+        std::strstr(path, "/Contents/Helpers/") != nullptr) {
+      return children[i];
+    }
+  }
+  return 0;
+}
+
 // Shows the plugin's editor as a DAW does and checks that its frames
 // arrive and that a click at (clickX, clickY) plays notes to the DAW.
 void checkEditor(Instance& instance, double seconds, const std::string& snapshot,
                  bool click, double clickX, double clickY, int clicks, double clickPause,
-                 bool cover, bool holdSurfaces, double holdSeconds) {
+                 bool cover, bool holdSurfaces, double holdSeconds, int resizeSteps,
+                 bool killEditor) {
   IPtr<IPlugView> view = owned(instance.controller()->createView(ViewType::kEditor));
   if (!view || view->isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue) {
     report("editor", false, "\"error\":\"no NSView editor\"");
@@ -461,6 +486,7 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
   const double blockSeconds = kBlock / kSampleRate;
   double rendered = nowSeconds();
   std::vector<std::string> notes;
+  std::vector<std::string> offs;
   // The surfaces the host keeps in use (--hold-surfaces), with the time it
   // took them.
   std::vector<std::pair<IOSurfaceRef, double>> held;
@@ -503,7 +529,7 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
       if (event != nil) [NSApp sendEvent:event];
       while (rendered + blockSeconds <= nowSeconds()) {
         instance.process();
-        for (const auto& note : instance.takeNoteOns()) notes.push_back(note);
+        for (const auto& note : instance.takeNoteOns(&offs)) notes.push_back(note);
         rendered += blockSeconds;
       }
     }
@@ -566,6 +592,67 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
            "\"clicks\":" + std::to_string(clicks) + ",\"redrawn\":" +
                std::to_string(redrawn) + ",\"firstStill\":" + std::to_string(firstStill));
   }
+  // A live resize as a DAW does it: the window changes size step by step,
+  // and the view hears of every step. The editor lives on and draws.
+  if (framed && resizeSteps > 0) {
+    const pid_t before = editorPid();
+    NSView* pluginView = window.contentView.subviews.firstObject;
+    for (int i = 0; i < resizeSteps; ++i) {
+      const int32 grow = (i % 20 < 10 ? i % 20 : 20 - i % 20) * 12;
+      ViewRect rect(0, 0, size.getWidth() + grow, size.getHeight() + grow / 2);
+      [window setContentSize:NSMakeSize(rect.getWidth(), rect.getHeight())];
+      view->onSize(&rect);
+      pump(0.008, [] { return false; });
+    }
+    ViewRect back = size;
+    [window setContentSize:NSMakeSize(back.getWidth(), back.getHeight())];
+    view->onSize(&back);
+    pump(1, [] { return false; });
+    const pid_t after = editorPid();
+    IOSurfaceRef shownNow = shownSurface(window);
+    const uint32_t seed = shownNow != nullptr ? IOSurfaceGetSeed(shownNow) : 0;
+    const uint32_t id = shownNow != nullptr ? IOSurfaceGetID(shownNow) : 0;
+    const NSPoint point = NSMakePoint(clickX, size.getHeight() - clickY);
+    [pluginView mouseDown:mouseEvent(NSEventTypeLeftMouseDown, window, point)];
+    pump(0.6, [&] {
+      IOSurfaceRef now = shownSurface(window);
+      return now != nullptr && (IOSurfaceGetID(now) != id || IOSurfaceGetSeed(now) != seed);
+    });
+    IOSurfaceRef now = shownSurface(window);
+    const bool redraw =
+        now != nullptr && (IOSurfaceGetID(now) != id || IOSurfaceGetSeed(now) != seed);
+    [pluginView mouseUp:mouseEvent(NSEventTypeLeftMouseUp, window, point)];
+    pump(0.3, [] { return false; });
+    report("editorResize", before > 0 && before == after && redraw,
+           "\"steps\":" + std::to_string(resizeSteps) + ",\"sameEditor\":" +
+               (before > 0 && before == after ? "true" : "false") + ",\"redraw\":" +
+               (redraw ? "true" : "false"));
+  }
+
+  // The editor ends while a note is held: the plugin ends the note itself,
+  // in the graph and towards the DAW.
+  if (framed && killEditor) {
+    NSView* pluginView = window.contentView.subviews.firstObject;
+    const NSPoint point = NSMakePoint(clickX, size.getHeight() - clickY);
+    notes.clear();
+    offs.clear();
+    [pluginView mouseDown:mouseEvent(NSEventTypeLeftMouseDown, window, point)];
+    pump(2, [&] { return !notes.empty(); });
+    pump(0.3, [] { return false; });
+    const std::vector<std::string> held = notes;
+    const pid_t pid = editorPid();
+    if (pid > 0) kill(pid, SIGKILL);
+    pump(1.5, [&] { return offs.size() >= held.size() && !held.empty(); });
+    bool all = !held.empty();
+    for (const auto& note : held) {
+      if (std::find(offs.begin(), offs.end(), note) == offs.end()) all = false;
+    }
+    [pluginView mouseUp:mouseEvent(NSEventTypeLeftMouseUp, window, point)];
+    report("editorNotesReleased", all,
+           "\"held\":" + std::to_string(held.size()) + ",\"ended\":" +
+               std::to_string(offs.size()));
+  }
+
   // Lets the last frame arrive before it is written.
   pump(0.5, [] { return false; });
   surface = shownSurface(window);
@@ -592,7 +679,7 @@ int main(int argc, char** argv) {
                          "[--presets n] [--realtime-seconds s] [--editor s "
                          "[--snapshot <png>] [--click x,y] [--clicks n] "
                          "[--click-pause s] [--cover] [--hold-surfaces "
-                         "[--hold-seconds s]]]\n");
+                         "[--hold-seconds s]] [--resize-steps n] [--kill-editor]]\n");
     return 2;
   }
   const std::string bundle = argv[1];
@@ -608,6 +695,8 @@ int main(int argc, char** argv) {
   bool cover = false;
   bool holdSurfaces = false;
   double holdSeconds = 0;
+  int resizeSteps = 0;
+  bool killEditor = false;
   for (int i = 2; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--wav" && i + 1 < argc) wavDir = argv[++i];
@@ -620,6 +709,8 @@ int main(int argc, char** argv) {
     else if (arg == "--cover") cover = true;
     else if (arg == "--hold-surfaces") holdSurfaces = true;
     else if (arg == "--hold-seconds" && i + 1 < argc) holdSeconds = std::atof(argv[++i]);
+    else if (arg == "--resize-steps" && i + 1 < argc) resizeSteps = std::atoi(argv[++i]);
+    else if (arg == "--kill-editor") killEditor = true;
     else if (arg == "--click" && i + 1 < argc) {
       click = std::sscanf(argv[++i], "%lf,%lf", &clickX, &clickY) == 2;
     }
@@ -685,7 +776,7 @@ int main(int argc, char** argv) {
 
   if (editorSeconds > 0) {
     checkEditor(a, editorSeconds, snapshot, click, clickX, clickY, clicks, clickPause,
-                cover, holdSurfaces, holdSeconds);
+                cover, holdSurfaces, holdSeconds, resizeSteps, killEditor);
   }
 
   // Every preset sounds, offline.
