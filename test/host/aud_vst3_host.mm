@@ -33,11 +33,15 @@
 // editor has to replace its surfaces to go on. --resize-steps n resizes the
 // view live in n steps: the editor lives on and draws. --kill-editor ends
 // the editor while a note is held: the plugin ends the note itself.
+// --reframe resizes the view without onSize, as Cubase's full screen mode
+// does: the editor follows. --occlude covers the plugin's window: the
+// editor still draws.
 //
 //   aud_vst3_host <bundle.vst3> [--wav <dir>] [--presets n]
 //     [--realtime-seconds s] [--editor s [--snapshot <png>] [--click x,y]
 //     [--clicks n] [--click-pause s] [--cover] [--hold-surfaces
-//     [--hold-seconds s]] [--resize-steps n] [--kill-editor]]
+//     [--hold-seconds s]] [--resize-steps n] [--kill-editor] [--reframe]
+//     [--occlude]]
 
 #import <Cocoa/Cocoa.h>
 #import <ImageIO/ImageIO.h>
@@ -455,7 +459,7 @@ pid_t editorPid() {
 void checkEditor(Instance& instance, double seconds, const std::string& snapshot,
                  bool click, double clickX, double clickY, int clicks, double clickPause,
                  bool cover, bool holdSurfaces, double holdSeconds, int resizeSteps,
-                 bool killEditor) {
+                 bool killEditor, bool reframe, bool occlude) {
   IPtr<IPlugView> view = owned(instance.controller()->createView(ViewType::kEditor));
   if (!view || view->isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue) {
     report("editor", false, "\"error\":\"no NSView editor\"");
@@ -629,6 +633,63 @@ void checkEditor(Instance& instance, double seconds, const std::string& snapshot
                (redraw ? "true" : "false"));
   }
 
+  // The view changes its size without onSize, as Cubase's full screen mode
+  // does: the editor follows within a few checks of the plugin.
+  if (framed && reframe) {
+    NSView* pluginView = window.contentView.subviews.firstObject;
+    const double scale = window.backingScaleFactor;
+    const NSSize grown = NSMakeSize(size.getWidth() + 160, size.getHeight() + 80);
+    [window setContentSize:grown];
+    [pluginView setFrame:NSMakeRect(0, 0, grown.width, grown.height)];
+    const size_t want = static_cast<size_t>(grown.width * scale);
+    pump(2, [&] {
+      IOSurfaceRef now = shownSurface(window);
+      return now != nullptr && IOSurfaceGetWidth(now) == want;
+    });
+    IOSurfaceRef now = shownSurface(window);
+    const size_t got = now != nullptr ? IOSurfaceGetWidth(now) : 0;
+    report("editorReframe", got == want,
+           "\"want\":" + std::to_string(want) + ",\"got\":" + std::to_string(got));
+    [window setContentSize:NSMakeSize(size.getWidth(), size.getHeight())];
+    [pluginView setFrame:NSMakeRect(0, 0, size.getWidth(), size.getHeight())];
+    pump(1, [] { return false; });
+  }
+
+  // A window covers the plugin's window: the editor still draws.
+  if (framed && occlude) {
+    NSWindow* cover = [[NSWindow alloc] initWithContentRect:NSInsetRect(window.frame, -8, -8)
+                                                  styleMask:NSWindowStyleMaskBorderless
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO];
+    cover.releasedWhenClosed = NO;
+    cover.backgroundColor = NSColor.grayColor;
+    cover.opaque = YES;
+    [cover orderFrontRegardless];
+    pump(1, [] { return false; });
+    NSView* pluginView = window.contentView.subviews.firstObject;
+    const NSPoint point = NSMakePoint(clickX, size.getHeight() - clickY);
+    IOSurfaceRef before = shownSurface(window);
+    const uint32_t id = before != nullptr ? IOSurfaceGetID(before) : 0;
+    const uint32_t seed = before != nullptr ? IOSurfaceGetSeed(before) : 0;
+    notes.clear();
+    [pluginView mouseDown:mouseEvent(NSEventTypeLeftMouseDown, window, point)];
+    pump(0.6, [&] {
+      IOSurfaceRef now = shownSurface(window);
+      return now != nullptr && (IOSurfaceGetID(now) != id || IOSurfaceGetSeed(now) != seed);
+    });
+    IOSurfaceRef now = shownSurface(window);
+    const bool redraw =
+        now != nullptr && (IOSurfaceGetID(now) != id || IOSurfaceGetSeed(now) != seed);
+    [pluginView mouseUp:mouseEvent(NSEventTypeLeftMouseUp, window, point)];
+    pump(0.3, [] { return false; });
+    const size_t played = notes.size();
+    [cover close];
+    pump(0.3, [] { return false; });
+    report("editorOccluded", redraw,
+           std::string("\"redraw\":") + (redraw ? "true" : "false") + ",\"notes\":" +
+               std::to_string(played));
+  }
+
   // The editor ends while a note is held: the plugin ends the note itself,
   // in the graph and towards the DAW.
   if (framed && killEditor) {
@@ -679,7 +740,8 @@ int main(int argc, char** argv) {
                          "[--presets n] [--realtime-seconds s] [--editor s "
                          "[--snapshot <png>] [--click x,y] [--clicks n] "
                          "[--click-pause s] [--cover] [--hold-surfaces "
-                         "[--hold-seconds s]] [--resize-steps n] [--kill-editor]]\n");
+                         "[--hold-seconds s]] [--resize-steps n] [--kill-editor] "
+                         "[--reframe] [--occlude]]\n");
     return 2;
   }
   const std::string bundle = argv[1];
@@ -697,6 +759,8 @@ int main(int argc, char** argv) {
   double holdSeconds = 0;
   int resizeSteps = 0;
   bool killEditor = false;
+  bool reframe = false;
+  bool occlude = false;
   for (int i = 2; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--wav" && i + 1 < argc) wavDir = argv[++i];
@@ -711,6 +775,8 @@ int main(int argc, char** argv) {
     else if (arg == "--hold-seconds" && i + 1 < argc) holdSeconds = std::atof(argv[++i]);
     else if (arg == "--resize-steps" && i + 1 < argc) resizeSteps = std::atoi(argv[++i]);
     else if (arg == "--kill-editor") killEditor = true;
+    else if (arg == "--reframe") reframe = true;
+    else if (arg == "--occlude") occlude = true;
     else if (arg == "--click" && i + 1 < argc) {
       click = std::sscanf(argv[++i], "%lf,%lf", &clickX, &clickY) == 2;
     }
@@ -776,7 +842,7 @@ int main(int argc, char** argv) {
 
   if (editorSeconds > 0) {
     checkEditor(a, editorSeconds, snapshot, click, clickX, clickY, clicks, clickPause,
-                cover, holdSurfaces, holdSeconds, resizeSteps, killEditor);
+                cover, holdSurfaces, holdSeconds, resizeSteps, killEditor, reframe, occlude);
   }
 
   // Every preset sounds, offline.

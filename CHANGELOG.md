@@ -63,8 +63,20 @@
 - Add the release of notes the editor still holds (ticket 37)
 
 - The plugin follows the notes the editor plays per channel and key
+
 - When the editor ends or crashes, its notes end in the graph and the DAW
+
 - Test host: --resize-steps resizes the view live, --kill-editor ends the editor
+
+
+### Changed
+
+- Follow full screen and covered windows in the editor view (ticket 37)
+
+- Occlusion no longer hides the view: only an invisible, minimized window or another Space
+- The visibility check also sends a new position, size or scale
+- Full screen notifications send the place
+- Test host: --reframe resizes the view without onSize, --occlude covers its window
 
 ## 0.1.0 - 2026-10-11
 

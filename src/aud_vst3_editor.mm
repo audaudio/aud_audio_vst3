@@ -42,6 +42,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -446,12 +447,13 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
     }
     const bool seen = visible();
     const Settings& settings = plugin_->settings();
+    const double width = view_ != nil ? view_.bounds.size.width : settings.editorWidth;
+    const double height = view_ != nil ? view_.bounds.size.height : settings.editorHeight;
+    sentGeometry_ = {onScreen.origin.x, onScreen.origin.y, width, height, scale};
     json.set("x", number(onScreen.origin.x));
     json.set("y", number(onScreen.origin.y));
-    json.set("width",
-             number(view_ != nil ? view_.bounds.size.width : settings.editorWidth));
-    json.set("height", number(view_ != nil ? view_.bounds.size.height
-                                           : settings.editorHeight));
+    json.set("width", number(width));
+    json.set("height", number(height));
     json.set("scale", number(scale));
     json.set("window", number(static_cast<double>(windowNumber)));
     json.set("visible", aud::Json::ofBool(seen));
@@ -469,19 +471,38 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
 
   // ...........................................................................
   // Whether the view can be seen: in a visible window that is not
-  // miniaturized, not occluded and on the current Space.
+  // miniaturized and lies on the current Space. Occlusion does not count:
+  // macOS reported Cubase's plugin window occluded while it filled the
+  // screen in full screen mode, and the paused editor stood still (ticket
+  // 37); a still surface draws nothing anyway.
   bool visible() const {
     NSWindow* window = view_.window;
     return window != nil && window.isVisible && !window.isMiniaturized &&
-           (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+           window.isOnActiveSpace;
   }
 
   // ...........................................................................
-  // Sends the place again when the view became visible or hidden without a
-  // window notification: the first place can report the view hidden (a DAW
-  // orders its window in after attaching the view).
+  // Where the view lies on the screen, its size in points and the scale of
+  // its screen; what place() sends.
+  std::array<double, 5> geometry() const {
+    NSWindow* window = view_.window;
+    if (window == nil || view_ == nil) return sentGeometry_;
+    const NSRect onScreen =
+        [window convertRectToScreen:[view_ convertRect:view_.bounds toView:nil]];
+    return {onScreen.origin.x, onScreen.origin.y, view_.bounds.size.width,
+            view_.bounds.size.height, window.backingScaleFactor};
+  }
+
+  // ...........................................................................
+  // Sends the place again when the view became visible or hidden, moved or
+  // changed its size without a window notification: the first place can
+  // report the view hidden (a DAW orders its window in after attaching the
+  // view), and a DAW may resize the view without onSize - Cubase in full
+  // screen mode.
   void checkVisible() {
-    if (view_ != nil && visible() != sentVisible_) sendPlace();
+    if (view_ != nil && (visible() != sentVisible_ || geometry() != sentGeometry_)) {
+      sendPlace();
+    }
   }
 
   // ...........................................................................
@@ -533,6 +554,7 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
             (window == nil ? "none"
                            : std::string(window.isVisible ? "visible" : "invisible") +
                                  (window.isMiniaturized ? ", miniaturized" : "") +
+                                 (window.isOnActiveSpace ? "" : ", on another Space") +
                                  ((window.occlusionState & NSWindowOcclusionStateVisible) != 0
                                       ? ", not occluded"
                                       : ", occluded")) +
@@ -698,7 +720,8 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
            NSWindowDidDeminiaturizeNotification,
            NSWindowDidChangeOcclusionStateNotification,
            NSWindowDidBecomeKeyNotification, NSWindowDidBecomeMainNotification,
-           NSWindowDidExposeNotification
+           NSWindowDidExposeNotification, NSWindowDidEnterFullScreenNotification,
+           NSWindowDidExitFullScreenNotification
          ]) {
       id token = [[NSNotificationCenter defaultCenter]
           addObserverForName:name
@@ -750,6 +773,7 @@ class EditorView : public CPluginView, public ViewDelegate, public PluginObserve
   int shownIndex_ = -1;
   uint32_t shownGeneration_ = 0;
   bool sentVisible_ = false;
+  std::array<double, 5> sentGeometry_ = {};
   bool placed_ = false;
   int64_t lastLateLog_ = 0;
 };
