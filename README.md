@@ -40,7 +40,10 @@ the node packages it names linked in.
 - The test host (`test/host/aud_vst3_host.mm`): loads a bundle as a DAW
   does and checks that every preset sounds offline, the program list,
   the MIDI mapping, the state across two instances and the time of
-  realtime blocks; it writes each preset's sound as WAV on request.
+  realtime blocks; it writes each preset's sound as WAV on request. With
+  `--editor` it shows the editor in a window that takes no focus, waits for
+  its frames, and clicks into it to receive the editor's notes on the
+  plugin's event output.
 - The editor (decision plugin-003, variant S; `src/aud_vst3_editor.mm`):
   the Flutter app the configuration names under `editor`, copied into the
   bundle's `Contents/Helpers` by `build-plugin.js --editor <app>`. One
@@ -128,7 +131,8 @@ builds its own with `--config <plugin.json> --package-config
 <.dart_tool/package_config.json>` and signs it with `--sign <identity>`
 (`--out`, `--install`, `--rtsan`, `--watchdog`). `host.js` builds the
 example plugin and runs the test host on it, or on the bundle it is given
-(`--wav <dir>`, `--presets n`, `--realtime-seconds s`). `validate.js` runs
+(`--wav <dir>`, `--presets n`, `--realtime-seconds s`, `--editor s`
+with `--snapshot <png>` and `--click x,y`). `validate.js` runs
 the SDK's validator on the bundles of `build/vst3` or on the given ones.
 `test-native.js` builds and runs the unit tests of the native code in
 `test/native`. `reaper-test.js` tests an installed plugin in REAPER: found,

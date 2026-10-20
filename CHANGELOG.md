@@ -27,13 +27,26 @@
 - Add the Flutter editor of the VST3 shell (ticket 37)
 
 - One editor process per plugin build, one Flutter view per instance (plugin-003 S)
+
 - Socket pair on fd 3 and app group Mach names, so a sandboxed editor connects
+
 - AudShellFd reads and writes the inherited socket through FFI
+
 - Protocol 2: presets in the welcome, preset changes, MIDI and preset choice from the editor
+
 - Editor MIDI plays in the graph and goes to the DAW on a MIDI output bus
+
 - editor, appGroup and editorSize in plugin.json; build-plugin.js --editor copies the app
+
 - AUD_VST3_LOG collects plugin and editor lines; REAPER test shows the editor
+
 - Spike editor app and its remote view removed
+
+- Add an editor check to the VST3 test host (ticket 37)
+
+- --editor shows the editor in a window that takes no focus and waits for its frames
+- --snapshot writes the frame as PNG, also from 10-bit extended range surfaces
+- --click taps the view and expects the editor's notes on the event output
 
 ## 0.1.0 - 2026-10-11
 

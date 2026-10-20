@@ -21,19 +21,31 @@
 // listen to or to compare with the app. One JSON line per check goes to
 // stdout; the exit code is 1 when a check fails.
 //
+// With --editor s the host also shows the plugin's editor, in a window
+// that does not take the focus, for at most s seconds: the editor's frames
+// arrive (written as PNG with --snapshot <png>), and a click at --click x,y
+// (points of the view) sends the editor's notes to the DAW on the plugin's
+// event output.
+//
 //   aud_vst3_host <bundle.vst3> [--wav <dir>] [--presets n]
-//     [--realtime-seconds s]
+//     [--realtime-seconds s] [--editor s [--snapshot <png>] [--click x,y]]
 
+#import <Cocoa/Cocoa.h>
+#import <ImageIO/ImageIO.h>
+#import <IOSurface/IOSurface.h>
+#import <QuartzCore/QuartzCore.h>
 #include <mach/mach_time.h>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "pluginterfaces/base/ibstream.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -147,6 +159,7 @@ class Instance {
     if (processor_->setupProcessing(setup) != kResultOk) return false;
     component_->activateBus(kAudio, kOutput, 0, true);
     component_->activateBus(kEvent, kInput, 0, true);
+    component_->activateBus(kEvent, kOutput, 0, true);
     if (component_->setActive(true) != kResultOk) return false;
     processor_->setProcessing(true);
     left_.assign(block, 0);
@@ -190,6 +203,7 @@ class Instance {
     data.outputs = &output;
     data.inputParameterChanges = &changes_;
     data.inputEvents = &events_;
+    data.outputEvents = &output_;
     data.processContext = &context;
     const double start = nowSeconds();
     processor_->process(data);
@@ -200,6 +214,21 @@ class Instance {
     changes_.clearQueue();
     events_.clear();
     return elapsed;
+  }
+
+  // The notes the plugin sent to the DAW since the last call, as
+  // "channel:pitch" with channels from 1.
+  std::vector<std::string> takeNoteOns() {
+    std::vector<std::string> notes;
+    for (int32 i = 0; i < output_.getEventCount(); ++i) {
+      Event e{};
+      if (output_.getEvent(i, e) == kResultOk && e.type == Event::kNoteOnEvent) {
+        notes.push_back(std::to_string(e.noteOn.channel + 1) + ":" +
+                        std::to_string(e.noteOn.pitch));
+      }
+    }
+    output_.clear();
+    return notes;
   }
 
   // Sets parameter `id` to `normalized` at the start of the next block.
@@ -240,6 +269,7 @@ class Instance {
   FUnknownPtr<IUnitInfo> units_;
   ParameterChanges changes_{64};
   EventList events_{256};
+  EventList output_{256};
   std::vector<float> left_;
   std::vector<float> right_;
   int32 block_ = kBlock;
@@ -276,23 +306,237 @@ bool finite(const std::vector<float>& samples) {
                      [](float s) { return std::isfinite(s); });
 }
 
+// The frame the plugin's view shows: the IOSurface its layer holds, nil
+// before the first frame.
+IOSurfaceRef shownSurface(NSWindow* window) {
+  NSView* view = window.contentView.subviews.firstObject;
+  CALayer* surface = view.layer.sublayers.firstObject;
+  id contents = surface.contents;
+  if (contents == nil ||
+      CFGetTypeID((__bridge CFTypeRef)contents) != IOSurfaceGetTypeID()) {
+    return nullptr;
+  }
+  return (__bridge IOSurfaceRef)contents;
+}
+
+// Whether the frame shows more than one color: the editor drew its widgets.
+bool drawn(IOSurfaceRef surface) {
+  IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr);
+  const auto* base = static_cast<const uint8_t*>(IOSurfaceGetBaseAddress(surface));
+  const size_t rowBytes = IOSurfaceGetBytesPerRow(surface);
+  const size_t width = IOSurfaceGetWidth(surface);
+  const size_t height = IOSurfaceGetHeight(surface);
+  uint32_t first = 0;
+  std::memcpy(&first, base, 4);
+  bool varied = false;
+  for (size_t y = 0; y < height && !varied; y += 4) {
+    const auto* row = reinterpret_cast<const uint32_t*>(base + y * rowBytes);
+    for (size_t x = 0; x < width; x += 4) {
+      if (row[x] != first) {
+        varied = true;
+        break;
+      }
+    }
+  }
+  IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+  return varied;
+}
+
+// The four characters of a pixel format, e.g. BGRA.
+std::string fourCc(OSType format) {
+  std::string out;
+  for (int shift = 24; shift >= 0; shift -= 8) out += static_cast<char>((format >> shift) & 0xff);
+  return out;
+}
+
+// Writes the frame `surface` as PNG to `path`: 8-bit BGRA, or the 10-bit
+// extended range BGRA of Impeller (w40a: 16 bits per component, the value
+// in the upper 10, 384 for 0.0 and 894 for 1.0).
+bool writePng(IOSurfaceRef surface, const std::string& path) {
+  const OSType format = IOSurfaceGetPixelFormat(surface);
+  if (format != 'BGRA' && format != 'w40a') return false;
+  const size_t width = IOSurfaceGetWidth(surface);
+  const size_t height = IOSurfaceGetHeight(surface);
+  std::vector<uint8_t> rgba(width * height * 4);
+  IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr);
+  const auto* base = static_cast<const uint8_t*>(IOSurfaceGetBaseAddress(surface));
+  const size_t rowBytes = IOSurfaceGetBytesPerRow(surface);
+  for (size_t y = 0; y < height; ++y) {
+    for (size_t x = 0; x < width; ++x) {
+      uint8_t* out = &rgba[(y * width + x) * 4];
+      if (format == 'BGRA') {
+        const uint8_t* in = base + y * rowBytes + x * 4;
+        out[0] = in[2];
+        out[1] = in[1];
+        out[2] = in[0];
+        out[3] = in[3];
+        continue;
+      }
+      const auto* in = reinterpret_cast<const uint16_t*>(base + y * rowBytes + x * 8);
+      auto unit = [](uint16_t v) {
+        const double value = ((v >> 6) - 384.0) / 510.0;
+        return static_cast<uint8_t>(std::lround(std::clamp(value, 0.0, 1.0) * 255));
+      };
+      out[0] = unit(in[2]);
+      out[1] = unit(in[1]);
+      out[2] = unit(in[0]);
+      out[3] = unit(in[3]);
+    }
+  }
+  IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+  CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  CGContextRef context = CGBitmapContextCreate(
+      rgba.data(), width, height, 8, width * 4, space,
+      kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+  CGImageRef image = context != nullptr ? CGBitmapContextCreateImage(context) : nullptr;
+  bool ok = false;
+  if (image != nullptr) {
+    NSURL* url = [NSURL fileURLWithPath:@(path.c_str())];
+    CGImageDestinationRef file = CGImageDestinationCreateWithURL(
+        (__bridge CFURLRef)url, CFSTR("public.png"), 1, nullptr);
+    if (file != nullptr) {
+      CGImageDestinationAddImage(file, image, nullptr);
+      ok = CGImageDestinationFinalize(file);
+      CFRelease(file);
+    }
+    CGImageRelease(image);
+  }
+  if (context != nullptr) CGContextRelease(context);
+  CGColorSpaceRelease(space);
+  return ok;
+}
+
+// A mouse event of `type` at `point` of `window`'s content.
+NSEvent* mouseEvent(NSEventType type, NSWindow* window, NSPoint point) {
+  return [NSEvent mouseEventWithType:type
+                            location:point
+                       modifierFlags:0
+                           timestamp:NSProcessInfo.processInfo.systemUptime
+                        windowNumber:window.windowNumber
+                             context:nil
+                         eventNumber:0
+                          clickCount:1
+                            pressure:type == NSEventTypeLeftMouseUp ? 0 : 1];
+}
+
+// Shows the plugin's editor as a DAW does and checks that its frames
+// arrive and that a click at (clickX, clickY) plays notes to the DAW.
+void checkEditor(Instance& instance, double seconds, const std::string& snapshot,
+                 bool click, double clickX, double clickY) {
+  IPtr<IPlugView> view = owned(instance.controller()->createView(ViewType::kEditor));
+  if (!view || view->isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue) {
+    report("editor", false, "\"error\":\"no NSView editor\"");
+    return;
+  }
+  ViewRect size{};
+  view->getSize(&size);
+  [NSApplication sharedApplication];
+  // No Dock icon and no focus: the window shows without taking the screen.
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  [NSApp finishLaunching];
+  const NSRect screen = NSScreen.mainScreen.visibleFrame;
+  const NSRect frame = NSMakeRect(NSMaxX(screen) - size.getWidth() - 16,
+                                  NSMinY(screen) + 16, size.getWidth(),
+                                  size.getHeight());
+  NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
+                                                 styleMask:NSWindowStyleMaskTitled
+                                                   backing:NSBackingStoreBuffered
+                                                     defer:NO];
+  window.releasedWhenClosed = NO;
+  window.title = @"aud_vst3_host";
+  [window orderFrontRegardless];
+  instance.start(kRealtime, kBlock);
+  view->attached((__bridge void*)window.contentView, kPlatformTypeNSView);
+
+  // Pumps the window's events and renders blocks in realtime for `wait`
+  // seconds or until `done` holds.
+  const double blockSeconds = kBlock / kSampleRate;
+  double rendered = nowSeconds();
+  std::vector<std::string> notes;
+  auto pump = [&](double wait, const std::function<bool()>& done) {
+    const double end = nowSeconds() + wait;
+    while (nowSeconds() < end && !done()) {
+      NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                          untilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]
+                                             inMode:NSDefaultRunLoopMode
+                                            dequeue:YES];
+      if (event != nil) [NSApp sendEvent:event];
+      while (rendered + blockSeconds <= nowSeconds()) {
+        instance.process();
+        for (const auto& note : instance.takeNoteOns()) notes.push_back(note);
+        rendered += blockSeconds;
+      }
+    }
+  };
+
+  const double start = nowSeconds();
+  pump(seconds, [&] {
+    IOSurfaceRef surface = shownSurface(window);
+    return surface != nullptr && drawn(surface);
+  });
+  IOSurfaceRef surface = shownSurface(window);
+  const bool framed = surface != nullptr && drawn(surface);
+  report("editor", framed,
+         "\"ms\":" + std::to_string((nowSeconds() - start) * 1000) +
+             ",\"width\":" + std::to_string(size.getWidth()) +
+             ",\"height\":" + std::to_string(size.getHeight()));
+
+  if (framed && click) {
+    // The view is flipped and fills the content: y counts from the top.
+    NSView* pluginView = window.contentView.subviews.firstObject;
+    const NSPoint point = NSMakePoint(clickX, size.getHeight() - clickY);
+    notes.clear();
+    [pluginView mouseDown:mouseEvent(NSEventTypeLeftMouseDown, window, point)];
+    pump(0.3, [] { return false; });
+    [pluginView mouseUp:mouseEvent(NSEventTypeLeftMouseUp, window, point)];
+    pump(2, [&] { return !notes.empty(); });
+    // The rest of the chord follows within a few blocks.
+    pump(0.3, [] { return false; });
+    std::string played;
+    for (const auto& note : notes) played += (played.empty() ? "\"" : ",\"") + note + "\"";
+    report("editorMidi", !notes.empty(), "\"notes\":[" + played + "]");
+  }
+  // Lets the last frame arrive before it is written.
+  pump(0.5, [] { return false; });
+  surface = shownSurface(window);
+  if (!snapshot.empty() && surface != nullptr) {
+    report("snapshot", writePng(surface, snapshot),
+           "\"path\":\"" + snapshot + "\",\"format\":\"" +
+               fourCc(IOSurfaceGetPixelFormat(surface)) + "\"");
+  }
+  view->removed();
+  view = nullptr;
+  instance.stop();
+  [window close];
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::fprintf(stderr, "usage: aud_vst3_host <bundle.vst3> [--wav <dir>] "
-                         "[--presets n] [--realtime-seconds s]\n");
+                         "[--presets n] [--realtime-seconds s] [--editor s "
+                         "[--snapshot <png>] [--click x,y]]\n");
     return 2;
   }
   const std::string bundle = argv[1];
   std::string wavDir;
   int32 maxPresets = 1 << 30;
   double realtimeSeconds = 5;
+  double editorSeconds = 0;
+  std::string snapshot;
+  bool click = false;
+  double clickX = 0, clickY = 0;
   for (int i = 2; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--wav" && i + 1 < argc) wavDir = argv[++i];
     else if (arg == "--presets" && i + 1 < argc) maxPresets = std::atoi(argv[++i]);
     else if (arg == "--realtime-seconds" && i + 1 < argc) realtimeSeconds = std::atof(argv[++i]);
+    else if (arg == "--editor" && i + 1 < argc) editorSeconds = std::atof(argv[++i]);
+    else if (arg == "--snapshot" && i + 1 < argc) snapshot = argv[++i];
+    else if (arg == "--click" && i + 1 < argc) {
+      click = std::sscanf(argv[++i], "%lf,%lf", &clickX, &clickY) == 2;
+    }
   }
 
   std::string error;
@@ -352,6 +596,8 @@ int main(int argc, char** argv) {
   } else {
     report("midiMapping", false, "\"error\":\"no IMidiMapping\"");
   }
+
+  if (editorSeconds > 0) checkEditor(a, editorSeconds, snapshot, click, clickX, clickY);
 
   // Every preset sounds, offline.
   if (!a.start(kOffline, kBlock)) {

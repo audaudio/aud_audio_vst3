@@ -6,12 +6,13 @@
 
 // Builds the test host test/host/aud_vst3_host.mm with the hosting classes
 // of the vendored SDK and runs it on a plugin bundle (ticket 37): every
-// preset sounds, program list, MIDI mapping, state and realtime blocks.
+// preset sounds, program list, MIDI mapping, state and realtime blocks, and
+// with --editor the editor's frames and notes.
 // Objects and the binary are cached under .dart_tool/vst3-build/host.
 //
 //   node scripts/host.js                       the example plugin, built first
 //   node scripts/host.js <bundle.vst3> [--wav <dir>] [--presets n]
-//     [--realtime-seconds s]
+//     [--realtime-seconds s] [--editor s [--snapshot <png>] [--click x,y]]
 
 'use strict';
 
@@ -88,6 +89,12 @@ async function buildHost() {
       ...objects,
       '-framework',
       'Cocoa',
+      '-framework',
+      'IOSurface',
+      '-framework',
+      'QuartzCore',
+      '-framework',
+      'ImageIO',
     ]);
   }
   return binary;
