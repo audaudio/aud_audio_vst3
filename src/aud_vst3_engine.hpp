@@ -4,19 +4,22 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// The engine of the spike plugin: a graph and its headless host (ticket 20,
-// plugin-002) with the threads the host demands (ticket 24).
+// The engine of the plugin: a graph with the build's node packages and its
+// headless host (ticket 20, plugin-002) with the threads the host demands
+// (tickets 24 and 37).
 //
-// - The realtime thread calls pushParam(), render() and, rendering
-//   offline, waitForParams(), nothing else. The caller keeps every call of
-//   it out of the destructor's way (Plugin::process and terminate).
+// - The realtime thread calls pushParam(), requestPreset(), render() and,
+//   rendering offline, waitForParams() and waitForPreset(), nothing else.
+//   The caller keeps every call of it out of the destructor's way
+//   (Plugin::process and terminate).
 // - One control thread per engine owns every [control] call of the graph
-//   and the host: loading and saving the document, parameters, meters and
+//   and the host: loading the document, applying presets, parameters and
 //   notifications. aud_host_set_param is [control], so the parameter
-//   changes the plugin host hands to the processor travel through a
-//   lock-free ring to the control thread, which wakes on a semaphore the
-//   realtime thread posts. A change the graph's queue refuses waits on the
-//   control thread and is passed on again; its value counts as current.
+//   changes the DAW hands to the processor travel through a lock-free ring
+//   to the control thread, which wakes on a semaphore the realtime thread
+//   posts. A change the graph's queue refuses waits on the control thread
+//   and is passed on again; its value counts as current. A preset the DAW
+//   asks for in a block travels the same way, newest request first.
 // - Other threads hand tasks to the control thread with run() and wait.
 
 #ifndef AUD_VST3_ENGINE_HPP
@@ -37,7 +40,8 @@
 #include "aud_audio_graph.h"
 #include "aud_spsc_queue.hpp"
 
-#include "aud_vst3_probe.hpp"
+#include "aud_vst3_config.hpp"
+#include "aud_vst3_settings.hpp"
 
 namespace aud_vst3 {
 
@@ -65,7 +69,7 @@ struct EngineParam {
   uint32_t index = 0;
 
   // ...........................................................................
-  // The range of the plain value, and the value the bundled document sets.
+  // The range of the plain value, and the value the document sets.
   float min = 0;
   float max = 1;
   float defaultValue = 0;
@@ -77,12 +81,15 @@ struct EngineParam {
 };
 
 // #############################################################################
-// The meter of the output.
-struct EngineMeter {
-  // ...........................................................................
-  // The peak and the RMS level, each the higher of the two channels.
-  float peak = 0;
-  float rms = 0;
+// What one render call hands the engine.
+struct EngineBlock {
+  float* const* outputs = nullptr;
+  uint32_t channels = 0;
+  uint32_t frames = 0;
+  bool offline = false;
+  const AudEvent* events = nullptr;
+  uint32_t numEvents = 0;
+  const AudTransportSnapshot* transport = nullptr;
 };
 
 // #############################################################################
@@ -90,9 +97,8 @@ struct EngineMeter {
 class Engine {
  public:
   // ...........................................................................
-  // Starts the control thread; `probe` takes the records of the realtime
-  // thread and the lines of the control thread.
-  explicit Engine(Probe& probe);
+  // Starts the control thread.
+  Engine();
 
   // ...........................................................................
   // Destroys the host and the graph on the control thread, then ends the
@@ -105,15 +111,20 @@ class Engine {
   Engine& operator=(const Engine&) = delete;
 
   // ...........................................................................
-  // [non-realtime] Creates the graph and the host on the control thread
-  // and loads `document`; false with `error` on a failure.
-  bool open(const std::string& document, double sampleRate,
-            uint32_t maxFrames, std::string* error);
+  // [non-realtime] Creates the graph with the build's node packages and the
+  // host, whose assets resolve against `baseDirectory`, and loads
+  // `document`; false with `error` on a failure.
+  bool open(const std::string& document, const std::string& baseDirectory,
+            double sampleRate, uint32_t maxFrames, std::string* error);
 
   // ...........................................................................
   // The parameters of the loaded document, ordered by id. Stable after
-  // open(): every document the plugin loads has the same nodes.
+  // open(): presets change values, never the nodes.
   const std::vector<EngineParam>& params() const { return params_; }
+
+  // ...........................................................................
+  // The parameter with the stable `id`, or null.
+  const EngineParam* param(uint32_t id) const;
 
   // ...........................................................................
   // [non-realtime] Prepares the graph for a sample rate and a block size.
@@ -124,30 +135,38 @@ class Engine {
   bool setActive(bool active);
 
   // ...........................................................................
-  // [non-realtime] Loads a document saved by save(); false with `error`.
-  bool load(const std::string& document, std::string* error);
+  // [non-realtime] The presets requestPreset() picks from, and what the
+  // control thread calls after it applied one, with its index; set before
+  // the first block, they stay.
+  void setPresets(const std::vector<ShellPreset>* presets,
+                  std::function<void(uint32_t)> applied);
 
   // ...........................................................................
-  // [non-realtime] The current state as a document.
-  std::string save();
+  // [non-realtime] Applies `preset` now; false with `error` when a node
+  // refused a part of it.
+  bool applyPreset(const ShellPreset& preset, std::string* error);
+
+  // ...........................................................................
+  // [realtime] Asks the control thread to apply the preset at `index` of
+  // setPresets(); a newer request replaces one not yet applied.
+  void requestPreset(uint32_t index);
 
   // ...........................................................................
   // [non-realtime] The current plain value of a parameter.
   float value(uint32_t id);
 
   // ...........................................................................
-  // [non-realtime] The output meter as the control thread last read it.
-  EngineMeter meter() const;
+  // [non-realtime] Sets a parameter on the control thread, e.g. from a
+  // restored state.
+  void setParam(uint32_t id, float plain);
 
   // ...........................................................................
-  // [realtime] Hands a parameter change to the control thread. `normalized`
-  // is what the plugin host sent, for the probe.
-  void pushParam(uint32_t id, float plain, double normalized, int32_t offset);
+  // [realtime] Hands a parameter change to the control thread.
+  void pushParam(uint32_t id, float plain);
 
   // ...........................................................................
   // [realtime] Renders one block into planar output channels.
-  void render(float* const* outputs, uint32_t channels, uint32_t frames,
-              bool offline);
+  void render(const EngineBlock& block) AUD_VST3_NONBLOCKING;
 
   // ...........................................................................
   // [offline rendering thread] Waits until the control thread has passed
@@ -157,6 +176,17 @@ class Engine {
   void waitForParams();
 
   // ...........................................................................
+  // [offline rendering thread, non-realtime] Waits until the requested
+  // preset is applied and the loads it started have ended, `timeoutMs` at
+  // most; true when nothing is left.
+  bool waitForPreset(uint32_t timeoutMs);
+
+  // ...........................................................................
+  // [non-realtime] The latency and the tail of the graph in frames.
+  int32_t latency();
+  uint32_t tail();
+
+  // ...........................................................................
   // [non-realtime] Runs `task` on the control thread and waits for it.
   void run(const std::function<void()>& task);
 
@@ -164,13 +194,6 @@ class Engine {
   // The count of parameter changes the ring refused since the start.
   uint64_t droppedParams() const {
     return droppedParams_.load(std::memory_order_relaxed);
-  }
-
-  // ...........................................................................
-  // The count of changes the graph's queue refused at first (and the
-  // control thread passed on again) since the start.
-  uint64_t refusedParams() const {
-    return refusedParams_.load(std::memory_order_relaxed);
   }
 
  private:
@@ -183,16 +206,16 @@ class Engine {
   bool loadOnControl(const std::string& document, std::string* error);
   void collectParams();
   void drainParams();
+  void applyRequestedPreset();
   bool passOn(uint32_t id, float value);
-  void readMeter();
+  void takeNotifications();
 
-  Probe& probe_;
   AudGraph* graph_ = nullptr;
   AudHost* host_ = nullptr;
   // The host as the realtime thread sees it, published by open().
   std::atomic<AudHost*> rtHost_{nullptr};
-  int32_t meterNode_ = 0;
   std::vector<EngineParam> params_;
+  uint32_t rampFrames_ = 0;
 
   // Realtime to control.
   AudSpscQueue<ParamChange> changes_;
@@ -200,17 +223,21 @@ class Engine {
   std::atomic<uint64_t> droppedParams_{0};
   // The changes pushed, and those the control thread took from the ring
   // and passed on or parked; the control thread signals drained_ after
-  // each pass, for waitForParams().
+  // each pass, for waitForParams() and waitForPreset().
   std::atomic<uint64_t> pushed_{0};
   std::atomic<uint64_t> taken_{0};
   dispatch_semaphore_t drained_;
   // Changes the graph's queue refused, newest value per id (control thread
-  // only), and how many were refused.
+  // only).
   std::vector<ParamChange> parked_;
-  std::atomic<uint64_t> refusedParams_{0};
-  // The changes the control thread passed on, and those a block has seen.
-  std::atomic<uint64_t> passed_{0};
-  uint64_t rendered_ = 0;  // realtime thread only
+
+  // The presets and the preset the realtime thread asked for (-1: none),
+  // with the count of requests and of those the control thread took.
+  const std::vector<ShellPreset>* presets_ = nullptr;
+  std::function<void(uint32_t)> presetApplied_;
+  std::atomic<int32_t> requestedPreset_{-1};
+  std::atomic<uint64_t> presetRequests_{0};
+  std::atomic<uint64_t> presetsTaken_{0};
 
   // Tasks for the control thread.
   std::mutex mutex_;
@@ -219,10 +246,7 @@ class Engine {
   uint64_t tasksQueued_ = 0;
   uint64_t tasksDone_ = 0;
   bool stopping_ = false;
-
-  std::atomic<float> meterPeak_{0};
-  std::atomic<float> meterRms_{0};
-  int64_t lastMeterNs_ = 0;
+  int64_t lastNotificationsNs_ = 0;
 
   std::thread thread_;
 };

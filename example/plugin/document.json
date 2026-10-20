@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "name": "aud_audio_vst3 example",
+  "outputChannels": [2],
+  "nodes": [
+    {
+      "id": "osc",
+      "type": "aud.graph.oscillator",
+      "preset": {
+        "schema": 1,
+        "type": "aud.graph.oscillator",
+        "params": { "amplitude": 0.3, "waveform": 1 }
+      }
+    },
+    {
+      "id": "filter",
+      "type": "aud.graph.filter",
+      "preset": {
+        "schema": 1,
+        "type": "aud.graph.filter",
+        "params": { "cutoff": 1200, "resonance": 0.3, "mode": 0 }
+      }
+    },
+    {
+      "id": "out",
+      "type": "aud.graph.mixer",
+      "inputChannels": [2, 2, 2, 2, 2, 2, 2, 2],
+      "outputChannels": [2],
+      "preset": {
+        "schema": 1,
+        "type": "aud.graph.mixer",
+        "params": { "master": 0.5 }
+      }
+    }
+  ],
+  "connections": [
+    { "from": "osc", "to": "filter" },
+    { "from": "filter", "to": "out" },
+    { "from": "out", "to": "graph" }
+  ],
+  "eventConnections": [{ "from": "graph", "to": "osc" }]
+}

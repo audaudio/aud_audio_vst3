@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "default": "saw",
+  "presets": [
+    {
+      "id": "saw",
+      "name": "Saw",
+      "nodes": {
+        "osc": {
+          "schema": 1,
+          "type": "aud.graph.oscillator",
+          "params": { "waveform": 1 }
+        },
+        "filter": {
+          "schema": 1,
+          "type": "aud.graph.filter",
+          "params": { "cutoff": 1200 }
+        }
+      }
+    },
+    {
+      "id": "sine",
+      "name": "Sine",
+      "nodes": {
+        "osc": {
+          "schema": 1,
+          "type": "aud.graph.oscillator",
+          "params": { "waveform": 0 }
+        },
+        "filter": {
+          "schema": 1,
+          "type": "aud.graph.filter",
+          "params": { "cutoff": 4000 }
+        }
+      }
+    }
+  ]
+}

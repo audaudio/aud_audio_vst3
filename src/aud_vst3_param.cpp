@@ -63,12 +63,12 @@ double ParamMapping::toNormalized(float plain) const {
 // AudParameter
 
 // .............................................................................
-AudParameter::AudParameter(const EngineParam& param)
+AudParameter::AudParameter(const EngineParam& param, const std::string& title)
     : mapping_(ParamMapping::of(param)) {
   Steinberg::UString(info.title, USTRINGSIZE(info.title))
-      .fromAscii((param.nodeId + " " + param.name).c_str());
+      .fromAscii((title.empty() ? param.nodeId + " " + param.name : title).c_str());
   Steinberg::UString(info.shortTitle, USTRINGSIZE(info.shortTitle))
-      .fromAscii(param.name.c_str());
+      .fromAscii((title.empty() ? param.name : title).c_str());
   Steinberg::UString(info.units, USTRINGSIZE(info.units))
       .fromAscii(param.unit.c_str());
   std::snprintf(unit_, sizeof(unit_), "%s", param.unit.c_str());

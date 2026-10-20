@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "Aud Example",
+  "vendor": "Audanika",
+  "url": "https://github.com/audaudio/aud_audio_vst3",
+  "email": "mailto:info@audanika.com",
+  "version": "0.2.0",
+  "bundleId": "io.audaudio.vst3.example",
+  "classId": "41554433455841504C45000000000001",
+  "subCategories": "Instrument|Synth",
+  "packages": [],
+  "document": "document.json",
+  "presets": "presets.json",
+  "content": [],
+  "voiceBudget": 0,
+  "parameters": [
+    { "node": "filter", "param": "cutoff", "name": "Cutoff" },
+    { "node": "out", "param": "master", "name": "Volume" }
+  ],
+  "controls": [
+    { "id": "brightness", "name": "Brightness", "channel": 0, "cc": 74,
+      "default": 0.5 }
+  ],
+  "editor": null
+}

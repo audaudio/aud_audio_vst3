@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add the VST3 shell that plays an app's graph document (ticket 37)
+
+- plugin.json, a graph document and presets of an app configure the shell
+- The node packages it names are compiled in by recipes, symbols hidden
+- Presets as program list, listed graph parameters, MIDI controls
+- The DAW's MIDI with IMidiMapping, its transport running free when stopped
+- State as JSON without paths; offline blocks wait for the loads
+- A test host, an example plugin and native tests; the spike's probes go
+
 ## 0.1.0 - 2026-10-11
 
 ### Added
@@ -48,6 +61,7 @@
 - Guard --dest of vendor-vst3sdk.js, check the number options of the REAPER scripts and escape the JSON of the ReaScript
 
 - Document the Dart API, the scripts and the editor; translate the German README
+
 
 ## 0.0.2 - 2026-10-08
 

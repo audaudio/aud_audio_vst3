@@ -4,41 +4,28 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// Builds the VST3 bundles of the spike S0-plugin-ui (ticket 24) with clang,
-// without CMake (decision 4 of the plan review): the vendored SDK subset
-// (src/third_party/vst3sdk/SOURCES.txt), the graph engine and the plugin.
-// The graph and the core come from the package config, as the graph's build
-// hook resolves them (build-001); flavor 2 builds against the graph and the
-// core at tag 0.3.0, cloned into .dart_tool.
+// Builds the VST3 bundle of an app from its plugin.json (ticket 37,
+// doc/plugin-bundle.md) with clang, without CMake: the vendored SDK subset
+// (src/third_party/vst3sdk/SOURCES.txt), the graph engine, the node
+// packages plugin.json names, and the shell. The packages come from a
+// package config - the app's, so that the plugin plays the versions the app
+// plays -, compiled from their sources and the manifests of their vendored
+// code (build-001) by the recipes below, which mirror their build hooks.
 //
-// Every bundle exports only the three VST3 entry points and hides all other
-// symbols (-fvisibility=hidden, an exported-symbols list), so two
-// aud_audio-based plugins in one process never share code; --no-hygiene
-// builds the control bundle of that test without both.
+// The bundle exports only the three VST3 entry points and hides all other
+// symbols (plugin-004): -fvisibility=hidden and an exported-symbols list, so
+// that two plugins over the engine never share code in one DAW process. It
+// is built for Apple silicon (release-005) and signed with the hardened
+// runtime: by `--sign <identity>`, ad hoc without.
 //
 // Objects are cached under .dart_tool/vst3-build by the hash of their
 // source, the flags and all headers the build may include.
 //
-//   node scripts/build-plugin.js                    variants A, S, F, B, C, D
-//   node scripts/build-plugin.js --variant C        one variant
-//   node scripts/build-plugin.js --flavor 2         against graph 0.3.0
-//   node scripts/build-plugin.js --no-hygiene       the collision control
-//   node scripts/build-plugin.js --rtsan            RealtimeSanitizer
-//   node scripts/build-plugin.js --watchdog         the graph's watchdog
-//   node scripts/build-plugin.js --install          copy to the user's
-//                                                   VST3 folder
-//   node scripts/build-plugin.js --editor           build the Flutter editor
-//                                                   and put it into bundles A,
-//                                                   S, F, and in process into B
-//   node scripts/build-plugin.js --flutter <flutter>  the Flutter SDK of the
-//                                                   editor, its folder or its
-//                                                   bin/flutter (the B test
-//                                                   with two Flutter versions)
-//
-// Variant B carries the editor in process: a copy of FlutterMacOS.framework
-// whose name, Objective-C classes and Swift module start with a random
-// prefix of the same length as `Flutter`, so that two plugins with two
-// Flutter versions do not share classes, and the editor's AOT framework.
+//   node scripts/build-plugin.js                  the example plugin
+//   node scripts/build-plugin.js --config <plugin.json>
+//       [--package-config <.dart_tool/package_config.json>]
+//       [--out <directory>] [--sign <identity>] [--install]
+//       [--rtsan] [--watchdog]
 
 'use strict';
 
@@ -51,158 +38,37 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const sdkDir = path.join(root, 'src', 'third_party', 'vst3sdk');
 const buildDir = path.join(root, '.dart_tool', 'vst3-build');
-const outDir = path.join(root, 'build', 'vst3');
-const installDir = path.join(
-  os.homedir(),
-  'Library',
-  'Audio',
-  'Plug-Ins',
-  'VST3',
-);
+const installDir = path.join(os.homedir(), 'Library', 'Audio', 'Plug-Ins', 'VST3');
+const exampleConfig = path.join(root, 'example', 'plugin', 'plugin.json');
 
-// The plugin's own sources; the view of the variant is added per build.
-const pluginSources = [
+// The shell's own sources.
+const shellSources = [
+  'src/aud_vst3_bundle.mm',
   'src/aud_vst3_engine.cpp',
   'src/aud_vst3_factory.cpp',
+  'src/aud_vst3_midi.cpp',
   'src/aud_vst3_param.cpp',
   'src/aud_vst3_plugin.cpp',
-  'src/aud_vst3_probe.cpp',
-  'src/aud_vst3_skew.cpp',
+  'src/aud_vst3_settings.cpp',
+  'src/aud_vst3_transport.cpp',
 ];
 
-const variantSources = {
-  A: [
-    'src/aud_vst3_driver.mm',
-    'src/aud_vst3_objc.mm',
-    'src/aud_vst3_remote_view.mm',
-    'src/aud_vst3_shell.cpp',
-    'src/aud_vst3_socket.cpp',
-    'src/aud_vst3_surfaces.mm',
-  ],
-  B: [
-    'src/aud_vst3_driver.mm',
-    'src/aud_vst3_objc.mm',
-    'src/aud_vst3_flutter_view.mm',
-    'src/aud_vst3_shell.cpp',
-  ],
-  S: [
-    'src/aud_vst3_driver.mm',
-    'src/aud_vst3_objc.mm',
-    'src/aud_vst3_remote_view.mm',
-    'src/aud_vst3_shell.cpp',
-    'src/aud_vst3_socket.cpp',
-    'src/aud_vst3_surfaces.mm',
-  ],
-  F: [
-    'src/aud_vst3_driver.mm',
-    'src/aud_vst3_objc.mm',
-    'src/aud_vst3_remote_view.mm',
-    'src/aud_vst3_shell.cpp',
-    'src/aud_vst3_socket.cpp',
-    'src/aud_vst3_surfaces.mm',
-  ],
-  C: [
-    'src/aud_vst3_driver.mm',
-    'src/aud_vst3_objc.mm',
-    'src/aud_vst3_native_view.mm',
-  ],
-  D: [],
-};
-
-const frameworks = ['Cocoa', 'CoreAudio', 'CoreGraphics', 'IOSurface', 'QuartzCore'];
+const frameworks = ['AppKit', 'CoreAudio', 'CoreFoundation', 'Foundation'];
 
 // The machine every object and binary is built for.
 const targetFlags = ['-arch', 'arm64', '-mmacosx-version-min=12.0'];
 
-function parseArgs(argv) {
-  const options = {
-    variants: [],
-    flavor: 1,
-    hygiene: true,
-    rtsan: false,
-    watchdog: false,
-    flutter: 'flutter',
-    install: false,
-    editor: false,
-  };
-  for (let i = 0; i < argv.length; ++i) {
-    const arg = argv[i];
-    if (arg === '--variant') options.variants.push(argv[++i].toUpperCase());
-    else if (arg === '--flavor') options.flavor = Number(argv[++i]);
-    else if (arg === '--no-hygiene') options.hygiene = false;
-    else if (arg === '--rtsan') options.rtsan = true;
-    else if (arg === '--watchdog') options.watchdog = true;
-    else if (arg === '--install') options.install = true;
-    else if (arg === '--editor') options.editor = true;
-    else if (arg === '--flutter') {
-      const sdk = argv[++i];
-      const isDir = fs.existsSync(sdk) && fs.statSync(sdk).isDirectory();
-      options.flutter = isDir ? path.join(sdk, 'bin', 'flutter') : sdk;
-    }
-    else throw new Error(`Unknown option ${arg}`);
-  }
-  if (options.variants.length === 0) {
-    options.variants = ['A', 'S', 'F', 'B', 'C', 'D'];
-  }
-  for (const variant of options.variants) {
-    if (!variantSources[variant]) throw new Error(`Unknown variant ${variant}`);
-  }
-  if (options.flavor !== 1 && options.flavor !== 2) {
-    throw new Error('The flavor is 1 or 2');
-  }
-  return options;
-}
+// ............................................................................
+// The node packages: what their build hooks compile, the function that
+// registers their nodes, and the one that sets the samplers' voice budget.
 
-function run(command, args, cwd = root) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
-  if (result.error) throw new Error(`${command} failed: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new Error(
-      `${path.basename(command)} failed:\n${result.stdout}${result.stderr}`,
-    );
-  }
-  return result.stdout;
-}
-
-// The `src` directory of a package, resolved through the package config.
-function packageSrc(name) {
-  const configPath = path.join(root, '.dart_tool', 'package_config.json');
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Run dart pub get first: ${configPath} is missing`);
-  }
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  const entry = config.packages.find((p) => p.name === name);
-  if (!entry) throw new Error(`Package ${name} is not in the package config`);
-  const rootUri = new URL(entry.rootUri, `file://${configPath}`);
-  return path.join(decodeURIComponent(rootUri.pathname), 'src');
-}
-
-// The `src` directory of a family package at `tag`, cloned into .dart_tool.
-function taggedSrc(name, tag) {
-  const dir = path.join(root, '.dart_tool', `${name}-${tag}`);
-  if (!fs.existsSync(path.join(dir, 'src'))) {
-    run('git', [
-      'clone',
-      '--quiet',
-      '--depth',
-      '1',
-      '--branch',
-      tag,
-      `git@github.com:audaudio/${name}.git`,
-      dir,
-    ]);
-  }
-  return path.join(dir, 'src');
-}
-
-function engineDirs(flavor) {
-  if (flavor === 2) {
-    return {
-      graph: taggedSrc('aud_audio_graph', '0.3.0'),
-      core: taggedSrc('aud_audio_core', '0.3.0'),
-    };
-  }
-  return { graph: packageSrc('aud_audio_graph'), core: packageSrc('aud_audio_core') };
+// Every C++ file directly in `dir`, as the hooks list them.
+function cppIn(dir) {
+  return fs
+    .readdirSync(dir)
+    .filter((file) => file.endsWith('.cpp'))
+    .sort()
+    .map((file) => path.join(dir, file));
 }
 
 function readList(file) {
@@ -211,6 +77,122 @@ function readList(file) {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function listIn(dir, manifest) {
+  return readList(path.join(dir, manifest)).map((entry) => path.join(dir, entry));
+}
+
+const recipes = {
+  aud_dsp_sampler: (src) => {
+    const sfizz = path.join(src, 'third_party', 'sfizz');
+    return {
+      sources: [...cppIn(src), ...listIn(sfizz, 'SOURCES.txt')],
+      includes: [src, ...listIn(sfizz, 'INCLUDES.txt')],
+      defines: [
+        'GHC_FILESYSTEM_FWD',
+        'ENABLE_DSD',
+        'ENABLE_THREADS',
+        'HAVE_FSEEKO',
+        'HAVE___BUILTIN_CLZ',
+        'NOMINMAX',
+      ],
+      flags: [],
+      register: 'aud_dsp_sampler_register',
+      voiceBudget: 'aud_dsp_sampler_set_voice_budget',
+      notices: [path.join(src, 'third_party', 'NOTICES.md')],
+    };
+  },
+  aud_dsp_effects: (src) => {
+    const third = path.join(src, 'third_party');
+    return {
+      sources: [
+        ...cppIn(src),
+        path.join(third, 'dunne_audio_kit', 'AdjustableDelayLine.cpp'),
+        path.join(third, 'dunne_audio_kit', 'StereoDelay.cpp'),
+        path.join(third, 'freeverb', 'allpass.cpp'),
+        path.join(third, 'freeverb', 'comb.cpp'),
+        path.join(third, 'freeverb', 'revmodel.cpp'),
+      ],
+      includes: [src, path.join(third, 'freeverb'), path.join(third, 'dunne_audio_kit')],
+      defines: [],
+      flags: ['-ffp-contract=off'],
+      register: 'aud_dsp_effects_register',
+      notices: [path.join(third, 'NOTICES.md')],
+    };
+  },
+  aud_audio_script: (src, packageSrc) => {
+    const quickjs = path.join(packageSrc('gg_quickjs'), 'quickjs-ng');
+    return {
+      sources: [
+        ...cppIn(src),
+        ...['dtoa.c', 'libregexp.c', 'libunicode.c', 'quickjs.c'].map((file) =>
+          path.join(quickjs, file),
+        ),
+      ],
+      includes: [src, quickjs],
+      defines: ['_GNU_SOURCE'],
+      flags: [],
+      // QuickJS-ng as gg_quickjs builds it: unsigned char, no warnings of
+      // third-party code.
+      cFlags: ['-funsigned-char', '-w'],
+      register: 'aud_audio_script_register',
+      notices: [
+        path.join(src, 'third_party', 'NOTICES.md'),
+        path.join(quickjs, 'LICENSE'),
+      ],
+    };
+  },
+};
+
+// ............................................................................
+// Arguments, tools
+
+function parseArgs(argv) {
+  const options = {
+    config: exampleConfig,
+    packageConfig: path.join(root, '.dart_tool', 'package_config.json'),
+    out: path.join(root, 'build', 'vst3'),
+    sign: '-',
+    install: false,
+    rtsan: false,
+    watchdog: false,
+  };
+  for (let i = 0; i < argv.length; ++i) {
+    const arg = argv[i];
+    if (arg === '--config') options.config = path.resolve(argv[++i]);
+    else if (arg === '--package-config') options.packageConfig = path.resolve(argv[++i]);
+    else if (arg === '--out') options.out = path.resolve(argv[++i]);
+    else if (arg === '--sign') options.sign = argv[++i];
+    else if (arg === '--install') options.install = true;
+    else if (arg === '--rtsan') options.rtsan = true;
+    else if (arg === '--watchdog') options.watchdog = true;
+    else throw new Error(`Unknown option ${arg}`);
+  }
+  return options;
+}
+
+function run(command, args, cwd = root) {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
+  if (result.error) throw new Error(`${command} failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`${path.basename(command)} failed:\n${result.stdout}${result.stderr}`);
+  }
+  return result.stdout;
+}
+
+// The `src` directory of a package, resolved through `configPath`.
+function packageSrcOf(configPath) {
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`Run dart pub get first: ${configPath} is missing`);
+  }
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  return (name) => {
+    const entry = config.packages.find((p) => p.name === name);
+    if (!entry) throw new Error(`Package ${name} is not in ${configPath}`);
+    const rootUri = new URL(entry.rootUri, `file://${configPath}`);
+    return path.join(decodeURIComponent(rootUri.pathname), 'src');
+  };
 }
 
 // The sources of the vendored SDK subset. vstsinglecomponenteffect.cpp
@@ -241,16 +223,18 @@ function compilerOf(options) {
   throw new Error('RealtimeSanitizer needs LLVM from Homebrew');
 }
 
-function flagsOf(options, variant, dirs, prefix) {
+// The flags every object shares: the target, optimization, hidden symbols
+// and the includes of the SDK, the graph, the core and the shell.
+function baseFlags(options, dirs) {
   const flags = [
     ...targetFlags,
-    '-O2',
+    '-O3',
     '-g',
     '-DRELEASE=1',
+    '-DNDEBUG=1',
     '-DSMTG_USE_STDATOMIC_H=1',
-    `-DAUD_VST3_VARIANT='${variant}'`,
-    `-DAUD_VST3_FLAVOR=${options.flavor}`,
-    `-DAUD_VST3_FLUTTER_PREFIX="${prefix}"`,
+    '-fvisibility=hidden',
+    '-fvisibility-inlines-hidden',
     '-I',
     sdkDir,
     '-I',
@@ -260,16 +244,9 @@ function flagsOf(options, variant, dirs, prefix) {
     '-I',
     path.join(root, 'src'),
   ];
-  if (options.hygiene) {
-    flags.push('-fvisibility=hidden', '-fvisibility-inlines-hidden');
-  } else {
-    flags.push('-DAUD_VST3_NO_HYGIENE=1');
-  }
   if (options.rtsan) {
     // The graph and the plugin mark their realtime path nonblocking, so the
     // sanitizer checks everything a block calls (ticket 20, decision 8).
-    // Without the watchdog: its thread-local makes dyld allocate on the
-    // first block of every audio thread in a plugin bundle (finding).
     flags.push(
       '-fsanitize=realtime',
       '-DAUD_GRAPH_RTSAN=1',
@@ -295,19 +272,21 @@ function headersHash(dirs) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (/\.(h|hpp)$/.test(entry.name)) files.push(full);
+      else if (/\.(h|hpp|hh|inc)$/.test(entry.name)) files.push(full);
     }
   };
-  for (const dir of dirs) walk(dir);
-  return hashOf(files.sort().map((file) => file + fs.readFileSync(file, "utf8")));
+  for (const dir of dirs) if (fs.existsSync(dir)) walk(dir);
+  return hashOf(files.sort().map((file) => file + fs.statSync(file).mtimeMs + fs.statSync(file).size));
 }
 
-async function compileAll(compiler, flags, files, objDir, headers) {
+// Compiles `files` with `flags` (plus `cFlags` for C files) into `objDir`.
+async function compileAll(compiler, flags, files, objDir, headers, cFlags = []) {
   fs.mkdirSync(objDir, { recursive: true });
   const jobs = files.map((file) => {
     const key = hashOf([
       compiler,
       ...flags,
+      ...cFlags,
       headers,
       file,
       fs.readFileSync(file, 'utf8'),
@@ -324,6 +303,7 @@ async function compileAll(compiler, flags, files, objDir, headers) {
       const job = pending[next++];
       const args = [
         ...flags,
+        ...(job.file.endsWith('.c') ? cFlags : []),
         ...languageFlags(job.file),
         '-c',
         job.file,
@@ -345,7 +325,81 @@ async function compileAll(compiler, flags, files, objDir, headers) {
   return jobs.map((job) => job.object);
 }
 
-function infoPlist(name, identifier, executable) {
+// ............................................................................
+// The bundle
+
+function readConfig(file) {
+  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const key of ['name', 'vendor', 'version', 'bundleId', 'classId']) {
+    if (typeof config[key] !== 'string' || config[key] === '') {
+      throw new Error(`${file} needs ${key}`);
+    }
+  }
+  if (!/^[0-9A-Fa-f]{32}$/.test(config.classId)) {
+    throw new Error(`${file}: classId must be 32 hex digits`);
+  }
+  config.packages = config.packages ?? [];
+  for (const name of config.packages) {
+    if (!recipes[name]) throw new Error(`${file}: no recipe for package ${name}`);
+  }
+  return config;
+}
+
+// The C string literal of `text`.
+function cString(text) {
+  return JSON.stringify(String(text));
+}
+
+function identityDefines(config) {
+  const cid = config.classId.toUpperCase();
+  return [
+    `-DAUD_VST3_NAME=${cString(config.name)}`,
+    `-DAUD_VST3_VENDOR=${cString(config.vendor)}`,
+    `-DAUD_VST3_URL=${cString(config.url ?? '')}`,
+    `-DAUD_VST3_EMAIL=${cString(config.email ?? '')}`,
+    `-DAUD_VST3_VERSION=${cString(config.version)}`,
+    `-DAUD_VST3_BUNDLE_ID=${cString(config.bundleId)}`,
+    `-DAUD_VST3_SUBCATEGORIES=${cString(config.subCategories ?? 'Instrument|Synth')}`,
+    ...[0, 1, 2, 3].map((i) => `-DAUD_VST3_CID${i}=0x${cid.slice(i * 8, i * 8 + 8)}u`),
+  ];
+}
+
+// The registration of the packages, generated per build.
+function packagesSource(config, packageRecipes) {
+  const lines = [
+    '// Generated by scripts/build-plugin.js; do not edit.',
+    '#include "aud_vst3_packages.hpp"',
+    '',
+  ];
+  for (const recipe of packageRecipes) {
+    lines.push(`extern "C" int32_t ${recipe.register}(const AudHostApi* host);`);
+    if (recipe.voiceBudget) {
+      lines.push(`extern "C" void ${recipe.voiceBudget}(int32_t voices);`);
+    }
+  }
+  lines.push(
+    '',
+    'namespace aud_vst3 {',
+    '',
+    'bool registerPackages(AudGraph* graph, std::string* error) {',
+    '  const AudHostApi* api = aud_graph_host_api(graph);',
+  );
+  config.packages.forEach((name, i) => {
+    lines.push(
+      `  if (const int32_t result = ${packageRecipes[i].register}(api); result != AUD_OK) {`,
+      `    if (error != nullptr) *error = "${name} refused: " + std::to_string(result);`,
+      '    return false;',
+      '  }',
+    );
+  });
+  lines.push('  return true;', '}', '', 'void setVoiceBudget(int32_t voices) {');
+  const budget = packageRecipes.find((recipe) => recipe.voiceBudget);
+  lines.push(budget ? `  ${budget.voiceBudget}(voices);` : '  (void)voices;');
+  lines.push('}', '', '}  // namespace aud_vst3', '');
+  return lines.join('\n');
+}
+
+function infoPlist(config, executable) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -355,217 +409,189 @@ function infoPlist(name, identifier, executable) {
   <key>CFBundleExecutable</key>
   <string>${executable}</string>
   <key>CFBundleIdentifier</key>
-  <string>${identifier}</string>
+  <string>${config.bundleId}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>${name}</string>
+  <string>${config.name}</string>
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${config.version}</string>
   <key>CFBundleSignature</key>
   <string>????</string>
   <key>CFBundleVersion</key>
-  <string>0.1.0</string>
+  <string>${config.version}</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
 </dict>
 </plist>
 `;
 }
 
-// A prefix of the length of `Flutter`, a letter and six hex digits, kept in
-// .dart_tool so that rebuilding a bundle keeps its prefix.
-function flutterPrefix(bundleName) {
-  const file = path.join(buildDir, `${bundleName}.prefix`);
-  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
-  const prefix = `F${createHash('sha256').update(`${bundleName}${Math.random()}`).digest('hex').slice(0, 6)}`;
-  fs.mkdirSync(buildDir, { recursive: true });
-  fs.writeFileSync(file, prefix);
-  return prefix;
+// The module info of the VST3 SDK, which a DAW may read instead of loading
+// the binary; it says what the factory says.
+function moduleInfo(config, bundleName) {
+  return JSON.stringify(
+    {
+      Name: bundleName,
+      Version: config.version,
+      'Factory Info': {
+        Vendor: config.vendor,
+        URL: config.url ?? '',
+        'E-Mail': config.email ?? '',
+        Flags: {
+          Unicode: true,
+          'Classes Discardable': false,
+          'Component Non Discardable': false,
+        },
+      },
+      Compatibility: [],
+      Classes: [
+        {
+          CID: config.classId.toUpperCase(),
+          Category: 'Audio Module Class',
+          Name: config.name,
+          Vendor: config.vendor,
+          Version: config.version,
+          'SDKVersion': 'VST 3.8.1',
+          'Sub Categories': (config.subCategories ?? 'Instrument|Synth').split('|'),
+          'Class Flags': 0,
+          Cardinality: 2147483647,
+          Snapshots: [],
+        },
+      ],
+    },
+    null,
+    2,
+  );
 }
 
-// Puts the editor of `editorApp` into `bundle` for variant B: its AOT
-// framework as is, and FlutterMacOS.framework as `<prefix>MacOS.framework`,
-// thinned to arm64, with every `Flutter` in its binary - class, protocol
-// and Swift module names, the install name - and in its Info.plist
-// replaced by the prefix.
-function embedInProcessFlutter(bundle, editorApp, prefix) {
-  // The rename replaces bytes in place: a prefix of another length - a
-  // .prefix file edited by hand - would shift and break the binary.
-  const from = Buffer.from('Flutter');
-  const to = Buffer.from(prefix);
-  if (to.length !== from.length) {
-    throw new Error(
-      `The Flutter prefix "${prefix}" must have ${from.length} bytes: ` +
-        `delete its .prefix file in ${buildDir}`,
+async function build(options) {
+  const config = readConfig(options.config);
+  const configDir = path.dirname(options.config);
+  const packageSrc = packageSrcOf(options.packageConfig);
+  const dirs = { graph: packageSrc('aud_audio_graph'), core: packageSrc('aud_audio_core') };
+  const packageRecipes = config.packages.map((name) => ({
+    name,
+    ...recipes[name](packageSrc(name), packageSrc),
+  }));
+  const compiler = compilerOf(options);
+  const flags = baseFlags(options, dirs);
+  const headers = headersHash([
+    sdkDir,
+    dirs.graph,
+    dirs.core,
+    path.join(root, 'src'),
+    ...packageRecipes.flatMap((recipe) => recipe.includes),
+  ]);
+  const variant = `${options.rtsan ? 'rtsan' : 'release'}${options.watchdog ? '-watchdog' : ''}`;
+  const objDir = path.join(buildDir, variant);
+
+  // The SDK, the graph and each package, then the shell with the identity
+  // of this plugin and its generated registration.
+  const objects = [
+    ...(await compileAll(compiler, flags, sdkSources(), path.join(objDir, 'sdk'), headers)),
+    ...(await compileAll(compiler, flags, cppIn(dirs.graph), path.join(objDir, 'graph'), headers)),
+  ];
+  for (const recipe of packageRecipes) {
+    const packageFlags = [
+      ...flags,
+      ...recipe.includes.flatMap((dir) => ['-I', dir]),
+      ...recipe.defines.map((define) => `-D${define}`),
+      ...recipe.flags,
+    ];
+    objects.push(
+      ...(await compileAll(
+        compiler,
+        packageFlags,
+        recipe.sources,
+        path.join(objDir, recipe.name),
+        headers,
+        recipe.cFlags ?? [],
+      )),
     );
   }
-  const frameworks = path.join(bundle, 'Contents', 'Frameworks');
-  fs.mkdirSync(frameworks, { recursive: true });
-  const source = path.join(editorApp, 'Contents', 'Frameworks');
-  run('ditto', [path.join(source, 'App.framework'), path.join(frameworks, 'App.framework')]);
-  const name = `${prefix}MacOS`;
-  const target = path.join(frameworks, `${name}.framework`);
-  const version = path.join(target, 'Versions', 'A');
-  fs.mkdirSync(version, { recursive: true });
-  const original = path.join(source, 'FlutterMacOS.framework', 'Versions', 'A');
-  run('ditto', [path.join(original, 'Resources'), path.join(version, 'Resources')]);
-  const thin = path.join(version, name);
-  run('lipo', [path.join(original, 'FlutterMacOS'), '-thin', 'arm64', '-output', thin]);
-  for (const file of [thin, path.join(version, 'Resources', 'Info.plist')]) {
-    const bytes = fs.readFileSync(file);
-    let count = 0;
-    let i = bytes.indexOf(from);
-    while (i >= 0) {
-      to.copy(bytes, i);
-      count += 1;
-      i = bytes.indexOf(from, i + from.length);
-    }
-    fs.writeFileSync(file, bytes);
-    if (file === thin) console.log(`Renamed ${count} occurrences of Flutter to ${prefix}`);
-  }
-  fs.symlinkSync('A', path.join(target, 'Versions', 'Current'));
-  fs.symlinkSync(`Versions/Current/${name}`, path.join(target, name));
-  fs.symlinkSync('Versions/Current/Resources', path.join(target, 'Resources'));
-  run('codesign', ['--force', '--sign', '-', target]);
-  run('codesign', ['--force', '--sign', '-', path.join(frameworks, 'App.framework')]);
-}
-
-function bundleNameOf(options, variant) {
-  return `AudSpike${variant}${options.flavor}${options.hygiene ? '' : 'NoHygiene'}${
-    options.rtsan ? 'Rtsan' : ''
-  }${options.watchdog ? 'Watchdog' : ''}`;
-}
-
-// Builds the Flutter editor in release mode with `flutter` and returns its
-// .app. Another SDK than the one on the path builds a copy of the editor
-// under .dart_tool, whose overrides point at the siblings by absolute path.
-function buildEditor(flutter) {
-  let editor = path.join(root, 'editor');
-  if (flutter !== 'flutter') {
-    // <copy>/editor next to a link to src/, so that the runner's relative
-    // include of src/aud_vst3_mach.h still resolves.
-    const base = path.join(root, '.dart_tool', `editor-${hashOf([flutter])}`);
-    const copy = path.join(base, 'editor');
-    fs.mkdirSync(copy, { recursive: true });
-    if (!fs.existsSync(path.join(base, 'src'))) {
-      fs.symlinkSync(path.join(root, 'src'), path.join(base, 'src'));
-    }
-    run('rsync', ['-a', '--delete', '--exclude', 'build', '--exclude', '.dart_tool',
-      '--exclude', 'pubspec.lock', `${editor}/`, `${copy}/`]);
-    const pubspec = path.join(copy, 'pubspec.yaml');
-    fs.writeFileSync(pubspec, fs.readFileSync(pubspec, 'utf8').replace('path: ../', `path: ${root}`));
-    // An older SDK pins meta below what native_toolchain_c of the family's
-    // build hooks needs; the override lets it build the editor (the B test).
-    fs.writeFileSync(path.join(copy, 'pubspec_overrides.yaml'),
-      `dependency_overrides:\n  aud_audio_ui_controls:\n    path: ${path.resolve(root, '..', 'aud_audio_ui_controls')}\n  meta: ^1.19.0\n`);
-    editor = copy;
-  }
-  run(flutter, ['build', 'macos', '--release'], editor);
-  const products = path.join(editor, 'build', 'macos', 'Build', 'Products', 'Release');
-  const app = fs.readdirSync(products).find((entry) => entry.endsWith('.app'));
-  if (!app) throw new Error(`No editor app in ${products}`);
-  return path.join(products, app);
-}
-
-async function buildVariant(options, variant, editorApp) {
-  const dirs = engineDirs(options.flavor);
-  const compiler = compilerOf(options);
-  // The prefix of the renamed Flutter framework of variant B: stable per
-  // bundle name, random per build directory.
-  const prefix = flutterPrefix(bundleNameOf(options, variant));
-  const flags = flagsOf(options, variant, dirs, prefix);
-  const graphSources = fs
-    .readdirSync(dirs.graph)
-    .filter((file) => file.endsWith('.cpp'))
-    .map((file) => path.join(dirs.graph, file));
-  const own = [...pluginSources, ...variantSources[variant]].map((file) =>
-    path.join(root, file),
-  );
-  const config = `${variant}${options.flavor}${options.hygiene ? '' : '-nohygiene'}${
-    options.rtsan ? '-rtsan' : ''
-  }${options.watchdog ? '-watchdog' : ''}`;
-  const objects = await compileAll(
-    compiler,
-    flags,
-    [...sdkSources(), ...graphSources, ...own],
-    path.join(buildDir, config),
-    headersHash([sdkDir, dirs.graph, dirs.core, path.join(root, 'src')]),
+  const generated = path.join(objDir, `packages-${hashOf([config.packages.join(',')])}.cpp`);
+  fs.mkdirSync(objDir, { recursive: true });
+  fs.writeFileSync(generated, packagesSource(config, packageRecipes));
+  objects.push(
+    ...(await compileAll(
+      compiler,
+      [...flags, ...identityDefines(config)],
+      [...shellSources.map((file) => path.join(root, file)), generated],
+      path.join(objDir, 'shell'),
+      headers,
+    )),
   );
 
-  const name = bundleNameOf(options, variant);
-  const bundle = path.join(outDir, `${name}.vst3`);
+  // The bundle.
+  const executable = config.name.replace(/[^A-Za-z0-9_-]/g, '');
+  const bundleName = `${executable}.vst3`;
+  const bundle = path.join(options.out, bundleName);
   fs.rmSync(bundle, { recursive: true, force: true });
-  const macos = path.join(bundle, 'Contents', 'MacOS');
+  const contents = path.join(bundle, 'Contents');
+  const macos = path.join(contents, 'MacOS');
+  const resources = path.join(contents, 'Resources');
+  const settings = path.join(resources, 'aud_plugin');
   fs.mkdirSync(macos, { recursive: true });
-  const resources = path.join(bundle, 'Contents', 'Resources');
-  fs.mkdirSync(resources, { recursive: true });
-  // The notices of the vendored SDK travel with every bundle (license-001).
-  const thirdParty = path.join(root, 'src', 'third_party');
-  fs.copyFileSync(path.join(thirdParty, 'NOTICES.md'), path.join(resources, 'NOTICES.md'));
-  fs.copyFileSync(
-    path.join(thirdParty, 'vst3sdk', 'LICENSE.txt'),
-    path.join(resources, 'VST3SDK-LICENSE.txt'),
-  );
+  fs.mkdirSync(settings, { recursive: true });
   const linkArgs = [
     ...targetFlags,
     '-bundle',
     '-o',
-    path.join(macos, name),
+    path.join(macos, executable),
     ...objects,
     ...frameworks.flatMap((framework) => ['-framework', framework]),
     '-Wl,-dead_strip',
+    '-exported_symbols_list',
+    path.join(root, 'src', 'aud_vst3_exports.exp'),
   ];
-  if (options.hygiene) {
-    linkArgs.push(
-      '-exported_symbols_list',
-      path.join(root, 'src', 'aud_vst3_exports.exp'),
-    );
-  }
   if (options.rtsan) linkArgs.push('-fsanitize=realtime');
   run(compiler, linkArgs);
-  fs.writeFileSync(
-    path.join(bundle, 'Contents', 'Info.plist'),
-    infoPlist(name, `io.audaudio.vst3.spike.${name.toLowerCase()}`, name),
-  );
-  fs.writeFileSync(path.join(bundle, 'Contents', 'PkgInfo'), 'BNDL????');
-  if (variant === 'B' && editorApp) embedInProcessFlutter(bundle, editorApp, prefix);
-  if (['A', 'S', 'F'].includes(variant) && editorApp) {
-    const helpers = path.join(bundle, 'Contents', 'Helpers');
-    fs.mkdirSync(helpers, { recursive: true });
-    run('ditto', [editorApp, path.join(helpers, path.basename(editorApp))]);
-    run('codesign', [
-      '--force',
-      '--deep',
-      '--sign',
-      '-',
-      path.join(helpers, path.basename(editorApp)),
-    ]);
+  fs.writeFileSync(path.join(contents, 'Info.plist'), infoPlist(config, executable));
+  fs.writeFileSync(path.join(contents, 'PkgInfo'), 'BNDL????');
+  fs.writeFileSync(path.join(resources, 'moduleinfo.json'), moduleInfo(config, bundleName));
+  for (const file of [
+    path.basename(options.config),
+    config.document ?? 'document.json',
+    config.presets ?? 'presets.json',
+  ]) {
+    fs.copyFileSync(path.join(configDir, file), path.join(settings, file));
   }
-  run('codesign', ['--force', '--sign', '-', bundle]);
+  // The notices of every vendored source travel with the bundle
+  // (license-001).
+  const notices = path.join(resources, 'notices');
+  fs.mkdirSync(notices, { recursive: true });
+  fs.copyFileSync(path.join(root, 'src', 'third_party', 'NOTICES.md'), path.join(notices, 'aud_audio_vst3.md'));
+  fs.copyFileSync(path.join(sdkDir, 'LICENSE.txt'), path.join(notices, 'vst3sdk-LICENSE.txt'));
+  for (const recipe of packageRecipes) {
+    recipe.notices.forEach((file, i) => {
+      if (fs.existsSync(file)) {
+        fs.copyFileSync(file, path.join(notices, `${recipe.name}${i === 0 ? '' : `-${i}`}-${path.basename(file)}`));
+      }
+    });
+  }
+  run('codesign', [
+    '--force',
+    '--options',
+    'runtime',
+    '--timestamp=none',
+    '--sign',
+    options.sign,
+    bundle,
+  ]);
   if (options.install) {
     fs.mkdirSync(installDir, { recursive: true });
-    const target = path.join(installDir, `${name}.vst3`);
+    const target = path.join(installDir, bundleName);
     fs.rmSync(target, { recursive: true, force: true });
     run('ditto', [bundle, target]);
   }
-  console.log(`Built ${path.relative(root, bundle)}${options.install ? ' (installed)' : ''}`);
+  console.log(`Built ${bundle}${options.install ? ' (installed)' : ''}`);
   return bundle;
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const editorApp =
-    options.editor &&
-    options.variants.some((variant) => ['A', 'S', 'F', 'B'].includes(variant))
-      ? buildEditor(options.flutter)
-      : null;
-  for (const variant of options.variants) {
-    await buildVariant(options, variant, editorApp);
-  }
-}
-
-// The compile settings, for scripts/test-native.js.
+// The compile settings, for scripts/test-native.js and scripts/host.js.
 module.exports = {
   root,
   sdkDir,
@@ -573,17 +599,20 @@ module.exports = {
   frameworks,
   targetFlags,
   run,
-  engineDirs,
+  packageSrcOf,
   sdkSources,
   hashOf,
   compilerOf,
-  flagsOf,
+  baseFlags,
   headersHash,
   compileAll,
+  cppIn,
+  build,
+  parseArgs,
 };
 
 if (require.main === module) {
-  main().catch((error) => {
+  build(parseArgs(process.argv.slice(2))).catch((error) => {
     console.error(error.message);
     process.exit(1);
   });

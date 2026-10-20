@@ -11,6 +11,7 @@
 #define AUD_VST3_PARAM_HPP
 
 #include <cstdint>
+#include <string>
 
 // Through the single-component header: it renames the controller's
 // setState and getState before it includes the controller headers, and
@@ -61,8 +62,10 @@ class AudParameter : public Steinberg::Vst::Parameter {
  public:
   // ...........................................................................
   // Creates the parameter of `param`: its stable id, titles, unit and
-  // steps, with the value of the bundled document as the default.
-  explicit AudParameter(const EngineParam& param);
+  // steps, with the value of the bundled document as the default. `title`
+  // replaces the title "<node id> <name>" when it is not empty.
+  explicit AudParameter(const EngineParam& param,
+                        const std::string& title = std::string());
 
   // ...........................................................................
   // The mapping of the parameter, for the realtime thread.
