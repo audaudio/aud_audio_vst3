@@ -71,9 +71,15 @@
 - Add the documentation of the editor and its checks (ticket 37)
 
 - README.md: the editor's rules in a DAW and the test host's editor checks
+
 - README.de.md translated anew from README.md
+
 - doc/plugin-bundle.md: appGroup, editorSize and what the shell does with the editor
+
 - index.jsonc: the editor in a DAW
+
+- Add the events of a silent call to the next block
+- A process call that renders nothing, as a host's parameter flush, keeps the editor's notes, the restored controls and the DAW's control changes for the next block that renders
 
 ### Changed
 

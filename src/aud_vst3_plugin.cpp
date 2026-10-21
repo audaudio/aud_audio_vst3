@@ -411,7 +411,8 @@ tresult PLUGIN_API Plugin::process(ProcessData& data) {
   if (engine != nullptr) {
     const uint32_t frames =
         data.numSamples > 0 ? static_cast<uint32_t>(data.numSamples) : 0;
-    numEvents_ = 0;
+    // A call that renders nothing - a host flushing its parameters - keeps
+    // the events it took from the queues for the next block that renders.
     // The controls a restored state set.
     ControlChange change{};
     while (controlChanges_.pop(change)) {
@@ -440,6 +441,7 @@ tresult PLUGIN_API Plugin::process(ProcessData& data) {
       block.numEvents = numEvents_;
       block.transport = &snapshot_;
       engine->render(block);
+      numEvents_ = 0;
       data.outputs[0].silenceFlags = 0;
     }
   }
