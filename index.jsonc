@@ -10,7 +10,8 @@
   "domain": [
     "VST3 shell over the headless host (S18): presets, parameters, DAW MIDI and transport, state, symbol hygiene",
     "Flutter editor out of process: shell protocol over an inherited socket, shared IOSurfaces, forwarded input, MIDI to the DAW (plugin-003, plugin-007)",
-    "Vendored VST3 SDK 3.8.1 subset; Node build, validator, test host, REAPER and probe scripts"
+    "Editor in a DAW: no pause on occlusion, geometry without onSize, surfaces kept in use replaced, notes of an ended editor released",
+    "Vendored VST3 SDK 3.8.1 subset; Node build, validator, test host with editor checks, REAPER script"
   ],
   "interfaces": {
     "uses": {

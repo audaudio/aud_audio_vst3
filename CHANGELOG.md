@@ -68,15 +68,25 @@
 
 - Test host: --resize-steps resizes the view live, --kill-editor ends the editor
 
+- Add the documentation of the editor and its checks (ticket 37)
+
+- README.md: the editor's rules in a DAW and the test host's editor checks
+- README.de.md translated anew from README.md
+- doc/plugin-bundle.md: appGroup, editorSize and what the shell does with the editor
+- index.jsonc: the editor in a DAW
 
 ### Changed
 
 - Follow full screen and covered windows in the editor view (ticket 37)
 
 - Occlusion no longer hides the view: only an invisible, minimized window or another Space
+
 - The visibility check also sends a new position, size or scale
+
 - Full screen notifications send the place
+
 - Test host: --reframe resizes the view without onSize, --occlude covers its window
+
 
 ## 0.1.0 - 2026-10-11
 

@@ -70,7 +70,15 @@ these three files.
       "default": 0 }
   ],
   // The editor app in Contents/Helpers; null for the host's generic view.
-  "editor": null
+  "editor": "Audanika Editor.app",
+  // The app group the sandboxed editor is signed with: the plugin names
+  // the Mach port of the editor's frames with it as prefix, the only names
+  // a sandboxed process may look up.
+  "appGroup": "TEAMID.com.audanika",
+  // The editor's size in points when a DAW opens it, and the smallest the
+  // DAW may make it.
+  "editorSize": { "width": 1024, "height": 640,
+                  "minWidth": 768, "minHeight": 480 }
 }
 ```
 
@@ -130,3 +138,13 @@ different nodes per MIDI channel connects the graph to an
 - **State.** JSON with the preset id, the parameter values and the values
   of the controls that moved, so that a project never holds a path of the
   machine it was saved on.
+- **Editor.** One editor process per DAW process and plugin build, one
+  Flutter view per instance, started with a socket pair as file descriptor
+  3 and showing its frames through IOSurfaces under a Mach name with the
+  `appGroup` prefix (plugin-003, plugin-007). The plugin pauses the editor
+  only while its window is invisible, minimized or on another Space, sends
+  any change of the view's position, size or scale, plays the editor's
+  MIDI and sends it to the DAW on the event output "MIDI Out", and ends
+  the notes the editor holds when the editor ends or crashes. A crashed
+  editor of an open view comes back; an editor without a view quits after
+  10 s.

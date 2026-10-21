@@ -42,8 +42,11 @@ the node packages it names linked in.
   the MIDI mapping, the state across two instances and the time of
   realtime blocks; it writes each preset's sound as WAV on request. With
   `--editor` it shows the editor in a window that takes no focus, waits for
-  its frames, and clicks into it to receive the editor's notes on the
-  plugin's event output.
+  its frames, clicks into it and expects the editor's notes on the plugin's
+  event output and a new frame for every click - also while other
+  processes keep the shared surfaces in use, during a live resize, after a
+  resize without `onSize`, under a covering window, and with a held note
+  when the editor is killed.
 - The editor (decision plugin-003, variant S; `src/aud_vst3_editor.mm`):
   the Flutter app the configuration names under `editor`, copied into the
   bundle's `Contents/Helpers` by `build-plugin.js --editor <app>`. One
@@ -53,9 +56,13 @@ the node packages it names linked in.
   surfaces under a Mach name prefixed with the configuration's
   `appGroup`, so that a sandboxed editor reaches both (decision
   plugin-007). The editor plays MIDI through the plugin, which also sends
-  it to the DAW on its event output, and chooses the plugin's preset.
-  `AUD_VST3_LOG=<file>` collects the lines of plugin and editor in a test.
-  Without `editor` the plugin shows the DAW's generic view.
+  it to the DAW on its event output, and chooses the plugin's preset. The
+  plugin pauses the editor only while its window is invisible, minimized
+  or on another Space, sends any change of position, size or scale within
+  0.1 s, and ends the notes the editor holds when the editor ends. Plugin
+  and editor log visibility changes, late frames and stalls to the unified
+  log; `AUD_VST3_LOG=<file>` collects their lines in a test. Without
+  `editor` the plugin shows the DAW's generic view.
 - The subset of the VST3 SDK 3.8.1 (MIT) in `src/third_party/vst3sdk`; see
   `src/third_party/NOTICES.md`.
 
@@ -94,8 +101,9 @@ await editor.close();                                // both directions at once
   ends both directions.
 - From the plugin: `AudShellWelcome` (the document's `AudShellParam`s, the
   editor's size and scale, the presets as `AudShellPresetInfo`s and the
-  current one), `AudShellPreset` (the plugin plays another preset), `AudShellParamValue` (a parameter changed in
-  the plugin, with its sequence number), `AudShellMeter`, `AudShellInput`
+  current one), `AudShellPreset` (the plugin plays another preset),
+  `AudShellParamValue` (a parameter changed in the plugin, with its
+  sequence number), `AudShellMeter`, `AudShellInput`
   (an input event of the plugin's view, of an `AudShellInputKind`),
   `AudShellPlace` (where the plugin's view is on the screen),
   `AudShellShow`, `AudShellHide`, `AudShellRemove` and `AudShellClose`.
@@ -128,16 +136,20 @@ node scripts/test-native.js
 
 `build-plugin.js` builds the example plugin into `build/vst3`; an app
 builds its own with `--config <plugin.json> --package-config
-<.dart_tool/package_config.json>` and signs it with `--sign <identity>`
-(`--out`, `--install`, `--rtsan`, `--watchdog`). `host.js` builds the
+<.dart_tool/package_config.json>`, copies its editor app into the bundle
+with `--editor <app>` and signs it with `--sign <identity>` (`--out`,
+`--install`, `--rtsan`, `--watchdog`). `host.js` builds the
 example plugin and runs the test host on it, or on the bundle it is given
 (`--wav <dir>`, `--presets n`, `--realtime-seconds s`, `--editor s`
-with `--snapshot <png>` and `--click x,y`). `validate.js` runs
+with `--snapshot <png>`, `--click x,y`, `--clicks n`, `--click-pause s`,
+`--cover`, `--hold-surfaces` and `--hold-seconds s`, `--resize-steps n`,
+`--reframe`, `--occlude` and `--kill-editor`). `validate.js` runs
 the SDK's validator on the bundles of `build/vst3` or on the given ones.
 `test-native.js` builds and runs the unit tests of the native code in
 `test/native`. `reaper-test.js` tests an installed plugin in REAPER: found,
 rendered offline with presets (`--render 0,13,27 --presets 28`), played
-live, its preset restored with the project (`--plugin <name>`).
+live, its preset restored with the project, its editor shown and captured
+(`--plugin <name>`, `--show-editor s`).
 `vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
 `src/third_party/vst3sdk` and writes `src/third_party/NOTICES.md`.
 
