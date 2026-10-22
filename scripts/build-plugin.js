@@ -38,6 +38,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 
 const root = path.resolve(__dirname, '..');
 const sdkDir = path.join(root, 'src', 'third_party', 'vst3sdk');
@@ -208,8 +209,8 @@ function packageSrcOf(configPath) {
   return (name) => {
     const entry = config.packages.find((p) => p.name === name);
     if (!entry) throw new Error(`Package ${name} is not in ${configPath}`);
-    const rootUri = new URL(entry.rootUri, `file://${configPath}`);
-    return path.join(decodeURIComponent(rootUri.pathname), 'src');
+    const rootUri = new URL(entry.rootUri, pathToFileURL(configPath));
+    return path.join(fileURLToPath(rootUri), 'src');
   };
 }
 

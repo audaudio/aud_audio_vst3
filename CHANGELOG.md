@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Refuse the shell socket on Windows
+
 ## 0.2.0 - 2026-10-22
 
 ### Added
@@ -105,6 +111,7 @@
 
 - Test host: --reframe resizes the view without onSize, --occlude covers its window
 
+
 ## 0.1.0 - 2026-10-11
 
 ### Added
@@ -153,6 +160,7 @@
 - Guard --dest of vendor-vst3sdk.js, check the number options of the REAPER scripts and escape the JSON of the ReaScript
 
 - Document the Dart API, the scripts and the editor; translate the German README
+
 
 ## 0.0.2 - 2026-10-08
 

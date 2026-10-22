@@ -50,12 +50,15 @@ class AudShellClient {
 
   // ...........................................................................
   /// Talks over the inherited socket [fd] and sends [hello].
+  // A POSIX socket only, which Windows refuses (ticket 38).
+  // coverage:ignore-start
   static Future<AudShellClient> fromFd(int fd, AudShellHello hello) async {
     final channel = await AudShellFd.open(fd);
     final client = AudShellClient._(channel.input, channel.add, channel.close);
     client.send(hello);
     return client;
   }
+  // coverage:ignore-end
 
   final void Function(List<int> bytes) _write;
   final Future<void> Function() _close;
