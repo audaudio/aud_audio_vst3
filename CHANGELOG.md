@@ -5,6 +5,7 @@
 ### Changed
 
 - Refuse the shell socket on Windows
+- Document the Windows behavior in both languages
 
 ## 0.2.0 - 2026-10-22
 

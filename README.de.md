@@ -82,7 +82,9 @@ File-Deskriptor 3 übergibt (`AudShellClient.fromFd`, gelesen und
 geschrieben von `AudShellFd` über FFI, da `dart:io` kein geerbtes Socket
 öffnet), oder über ein Unix-Domain-Socket, auf dem das Plugin lauscht
 (`AudShellClient.connect`). `example/aud_audio_vst3_example.dart` spielt
-beide Enden in einem Prozess durch.
+beide Enden in einem Prozess durch. Unter Windows, das einem Prozess kein
+Socket als Dateideskriptor übergibt, werfen `AudShellFd.open` und damit
+`AudShellClient.fromFd` einen `UnsupportedError`.
 
 ```dart
 import 'dart:io';
