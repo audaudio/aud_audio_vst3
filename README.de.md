@@ -110,18 +110,18 @@ await editor.close();                                // beide Richtungen zugleic
 - Vom Plugin: `AudShellWelcome` (die `AudShellParam`s des Dokuments, Größe
   und Skalierung des Editors, die Presets als `AudShellPresetInfo`s und das
   aktuelle), `AudShellPreset` (das Plugin spielt ein anderes Preset),
-  `AudShellParamValue` (ein Parameter hat sich im Plugin geändert, mit
-  seiner laufenden Nummer), `AudShellMeter`, `AudShellInput` (ein
-  Eingabe-Ereignis der View des Plugins, von einer `AudShellInputKind`),
-  `AudShellPlace` (wo die View des Plugins auf dem Bildschirm liegt),
-  `AudShellShow`, `AudShellHide`, `AudShellRemove` und `AudShellClose`.
+  `AudShellParamValue` (ein Parameter hat sich im Plugin geändert),
+  `AudShellInput` (ein Eingabe-Ereignis der View des Plugins, von einer
+  `AudShellInputKind`), `AudShellPlace` (wo die View des Plugins auf dem
+  Bildschirm liegt), `AudShellShow`, `AudShellHide` und `AudShellRemove`.
+- An den Editor: `AudShellClose` (beenden); das Plugin dieses Pakets
+  sendet es nicht, es beendet stattdessen die Verbindung.
 - An das Plugin: `AudShellHello`, `AudShellMidi` (MIDI-1.0-Bytes, die das
   Plugin spielt und an die DAW sendet), `AudShellSelectPreset`,
   `AudShellCommand` (ein `AudCommand` aus `aud_audio_core` mit dem
   Zeitstempel der Eingabe dahinter), `AudShellGesture`
-  (`AudShellGesturePhase.begin` und `end` einer Automations-Bearbeitung),
-  `AudShellCursor` und `AudShellProbe` (ein Messpunkt für das Probe-Log
-  des Plugins).
+  (`AudShellGesturePhase.begin` und `end` einer Automations-Bearbeitung)
+  und `AudShellCursor`.
 - Jede Nachricht nennt die Plugin-Instanz (`instance`), zu der sie gehört;
   `AudShellMessage.fromJson` liest, was `toJson` schreibt.
 - `AudShellCodec.encode(message)` rahmt eine Nachricht: eine 4-Byte-Länge

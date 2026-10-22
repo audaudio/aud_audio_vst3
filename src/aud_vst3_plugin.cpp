@@ -16,7 +16,6 @@
 
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
-#include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
@@ -140,7 +139,7 @@ void Plugin::addParameters() {
   auto* list = new ProgramList(STR16("Presets"), listId, kRootUnitId);
   for (const ShellPreset& preset : settings_.presets) {
     String128 name;
-    UString(name, 128).fromAscii(preset.name.c_str());
+    writeUtf16(preset.name, name, 128);
     list->addProgram(name);
   }
   addProgramList(list);
@@ -176,7 +175,7 @@ void Plugin::addParameters() {
   for (size_t i = 0; i < settings_.controls.size(); ++i) {
     const ShellControl& control = settings_.controls[i];
     String128 title;
-    UString(title, 128).fromAscii(control.name.c_str());
+    writeUtf16(control.name, title, 128);
     parameters.addParameter(title, nullptr, 0, control.defaultValue,
                             ParameterInfo::kCanAutomate, control.paramId);
     controlIds_.push_back(control.paramId);
@@ -194,7 +193,7 @@ void Plugin::addMidiParameters() {
       // A graph parameter whose stable id falls here keeps it.
       if (parameters.getParameter(id) != nullptr) continue;
       String128 title;
-      UString(title, 128).fromAscii(titleOf(channel, controller).c_str());
+      writeUtf16(titleOf(channel, controller), title, 128);
       parameters.addParameter(title, nullptr, 0,
                               controller == kMidiPitchBend ? 0.5 : 0,
                               ParameterInfo::kIsHidden, id);

@@ -52,5 +52,24 @@ void main() {
       channel.add([2]);
       await channel.close();
     });
+
+    test('closes the descriptor once, however often it is called', () async {
+      final (plugin, editor) = socketPair();
+      final (other, peer) = socketPair();
+      final channel = await AudShellFd.open(editor);
+      channel.input.listen((_) {});
+      final first = channel.close();
+      final second = channel.close();
+      await first;
+      // Another socket takes the closed number, as the next file opened may.
+      expect(dupFd(peer, editor), editor);
+      await second;
+      await channel.close();
+      writeAll(editor, [5]);
+      expect(readSome(other), [5]);
+      for (final fd in [plugin, editor, other, peer]) {
+        closeFd(fd);
+      }
+    });
   });
 }

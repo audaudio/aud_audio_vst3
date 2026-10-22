@@ -81,11 +81,11 @@ void main() {
         final fromPlugin = <AudShellMessage>[];
         final done = Completer<void>();
         client.messages.listen(fromPlugin.add, onDone: done.complete);
-        const meter = AudShellMeter(peak: 1, rms: 0);
-        plugin.add(AudShellCodec.encode(meter));
+        const param = AudShellParamValue(id: 7, value: 1);
+        plugin.add(AudShellCodec.encode(param));
         await plugin.close();
         await done.future;
-        expect([for (final m in fromPlugin) m.toJson()], [meter.toJson()]);
+        expect([for (final m in fromPlugin) m.toJson()], [param.toJson()]);
         await client.close();
         await received.cancel();
       });

@@ -79,7 +79,14 @@
 - index.jsonc: the editor in a DAW
 
 - Add the events of a silent call to the next block
+
 - A process call that renders nothing, as a host's parameter flush, keeps the editor's notes, the restored controls and the DAW's control changes for the next block that renders
+
+- Add non-ASCII names, close the fd once, drop dead messages
+- Preset, control and parameter names, units and values reach the DAW as UTF-16 through a small UTF-8 decoder without shared state, so that a name like Flügel shows right; a text that is no UTF-8 - overlong, a surrogate, above U+10FFFF - is read as Latin-1
+- AudShellFd.close() returns the future of its first call, so that close(2) runs once and never hits a descriptor that took the number
+- AudShellProbe, AudShellMeter and AudShellParamValue.sequence go: the plugin handles no probe and sends no meter or seq
+- AudShellClose stays for editors that handle it, documented as a message the plugin of this package does not send
 
 ### Changed
 

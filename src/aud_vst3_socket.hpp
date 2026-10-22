@@ -21,8 +21,8 @@
 // authenticated yet is replaced.
 //
 // send() may be called from any thread and never blocks: the outbox is
-// bounded. Above the soft limit droppable messages (input moves, meters)
-// are dropped and counted; above the hard limit the editor is taken as
+// bounded. Above the soft limit droppable messages (input moves) are
+// dropped and counted; above the hard limit the editor is taken as
 // hung and its connection is closed, so the host's UI thread never waits
 // for the editor and its memory never grows without bound.
 

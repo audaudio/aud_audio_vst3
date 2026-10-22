@@ -17,6 +17,79 @@ namespace aud_vst3 {
 
 using Steinberg::Vst::ParamValue;
 
+namespace {
+
+// A character of a text and the bytes it takes.
+struct CodePoint {
+  char32_t value;
+  size_t length;
+};
+
+// The character whose UTF-8 starts at `text[at]`; length 0 for none: a
+// byte no sequence starts with, a missing continuation byte, an overlong
+// encoding, a surrogate or a value above U+10FFFF.
+CodePoint utf8At(const std::string& text, size_t at) {
+  const auto byte = [&](size_t i) {
+    return static_cast<unsigned char>(text[i]);
+  };
+  const unsigned char lead = byte(at);
+  if (lead < 0x80) return {lead, 1};
+  // A continuation byte, or 0xF8 to 0xFF, starts no sequence.
+  if (lead < 0xC0 || lead >= 0xF8) return {0, 0};
+  const size_t length = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
+  if (text.size() - at < length) return {0, 0};
+  char32_t value = lead & (0x7F >> length);
+  for (size_t i = at + 1; i < at + length; ++i) {
+    if ((byte(i) & 0xC0) != 0x80) return {0, 0};
+    value = (value << 6) | (byte(i) & 0x3F);
+  }
+  // The smallest value of each length, below which a sequence is overlong.
+  constexpr char32_t kSmallest[] = {0, 0, 0x80, 0x800, 0x10000};
+  if (value < kSmallest[length] || value > 0x10FFFF ||
+      (value >= 0xD800 && value <= 0xDFFF)) {
+    return {0, 0};
+  }
+  return {value, length};
+}
+
+// Whether all of `text` is UTF-8.
+bool isUtf8(const std::string& text) {
+  for (size_t at = 0; at < text.size();) {
+    const size_t length = utf8At(text, at).length;
+    if (length == 0) return false;
+    at += length;
+  }
+  return true;
+}
+
+}  // namespace
+
+// #############################################################################
+void writeUtf16(const std::string& text, Steinberg::Vst::TChar* string,
+                size_t size) {
+  if (size == 0) return;
+  // Decided for the whole text, so that one bad byte does not mix both.
+  const bool utf8 = isUtf8(text);
+  size_t length = 0;
+  for (size_t at = 0; at < text.size();) {
+    const CodePoint c =
+        utf8 ? utf8At(text, at)
+             : CodePoint{static_cast<unsigned char>(text[at]), 1};
+    // Beyond U+FFFF a surrogate pair, which only goes whole.
+    const size_t units = c.value > 0xFFFF ? 2 : 1;
+    if (length + units > size - 1) break;
+    if (units == 2) {
+      const char32_t offset = c.value - 0x10000;
+      string[length++] = static_cast<char16_t>(0xD800 + (offset >> 10));
+      string[length++] = static_cast<char16_t>(0xDC00 + (offset & 0x3FF));
+    } else {
+      string[length++] = static_cast<char16_t>(c.value);
+    }
+    at += c.length;
+  }
+  string[length] = 0;
+}
+
 // #############################################################################
 // ParamMapping
 
@@ -65,13 +138,12 @@ double ParamMapping::toNormalized(float plain) const {
 // .............................................................................
 AudParameter::AudParameter(const EngineParam& param, const std::string& title)
     : mapping_(ParamMapping::of(param)) {
-  Steinberg::UString(info.title, USTRINGSIZE(info.title))
-      .fromAscii((title.empty() ? param.nodeId + " " + param.name : title).c_str());
-  Steinberg::UString(info.shortTitle, USTRINGSIZE(info.shortTitle))
-      .fromAscii((title.empty() ? param.name : title).c_str());
-  Steinberg::UString(info.units, USTRINGSIZE(info.units))
-      .fromAscii(param.unit.c_str());
-  std::snprintf(unit_, sizeof(unit_), "%s", param.unit.c_str());
+  writeUtf16(title.empty() ? param.nodeId + " " + param.name : title,
+             info.title, USTRINGSIZE(info.title));
+  writeUtf16(title.empty() ? param.name : title, info.shortTitle,
+             USTRINGSIZE(info.shortTitle));
+  writeUtf16(param.unit, info.units, USTRINGSIZE(info.units));
+  unit_ = param.unit;
   info.id = param.id;
   info.stepCount = mapping_.steps >= 2 ? mapping_.steps - 1 : 0;
   info.flags = (param.flags & AUD_PARAM_AUTOMATABLE) != 0
@@ -87,16 +159,20 @@ AudParameter::AudParameter(const EngineParam& param, const std::string& title)
 
 void AudParameter::toString(ParamValue normalized,
                             Steinberg::Vst::String128 string) const {
-  char text[64];
+  char number[64];
   const float plain = mapping_.toPlain(normalized);
   if (mapping_.steps >= 2) {
-    std::snprintf(text, sizeof(text), "%d", static_cast<int>(plain));
-  } else if (unit_[0] != 0) {
-    std::snprintf(text, sizeof(text), "%.2f %s", plain, unit_);
+    std::snprintf(number, sizeof(number), "%d", static_cast<int>(plain));
+    writeUtf16(number, string, 128);
+  } else if (!unit_.empty()) {
+    // The unit whole: a cut in a byte buffer could split one of its
+    // characters.
+    std::snprintf(number, sizeof(number), "%.2f ", plain);
+    writeUtf16(number + unit_, string, 128);
   } else {
-    std::snprintf(text, sizeof(text), "%.3f", plain);
+    std::snprintf(number, sizeof(number), "%.3f", plain);
+    writeUtf16(number, string, 128);
   }
-  Steinberg::UString(string, 128).fromAscii(text);
 }
 
 bool AudParameter::fromString(const Steinberg::Vst::TChar* string,

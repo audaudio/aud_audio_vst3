@@ -46,6 +46,7 @@ class AudShellFd {
   final ReceivePort _port;
   final _input = StreamController<Uint8List>(sync: true);
   bool _closed = false;
+  Future<void>? _closing;
 
   // ...........................................................................
   /// What the other end writes; ends when it closes.
@@ -77,8 +78,11 @@ class AudShellFd {
 
   // ...........................................................................
   /// Ends both directions: the reader sees the end, the descriptor closes.
-  Future<void> close() async {
-    if (_closed && _input.isClosed) return;
+  /// Every call returns the future of the first, so the descriptor closes
+  /// once: a second close(2) could close another file that took its number.
+  Future<void> close() => _closing ??= _end();
+
+  Future<void> _end() async {
     _closed = true;
     _shutdown(fd, _shutReadWrite);
     await _input.done.timeout(const Duration(seconds: 1), onTimeout: () {});

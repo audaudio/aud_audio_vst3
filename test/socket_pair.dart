@@ -34,6 +34,13 @@ final closeFd = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
   'close',
 );
 
+/// Makes `to` a second descriptor of the file of `from`, as dup2(2) does;
+/// returns `to`, or -1.
+final dupFd = _libc
+    .lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>(
+      'dup2',
+    );
+
 /// A connected pair of Unix domain sockets: the plugin's end and the
 /// editor's.
 (int, int) socketPair() {

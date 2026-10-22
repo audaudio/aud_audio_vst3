@@ -14,8 +14,8 @@ const int audShellProtocolVersion = 2;
 /// A message of the shell protocol between a plugin shell and its editor
 /// process (ticket 24, decisions 2 and 3 of the plan review): JSON objects
 /// with a `type`, framed by [AudShellCodec]. Parameter edits travel as
-/// [AudCommand]s; gestures, the parameter list, meters, input and the
-/// editor's lifecycle are messages of the shell.
+/// [AudCommand]s; gestures, the parameter list, input and the editor's
+/// lifecycle are messages of the shell.
 sealed class AudShellMessage {
   /// Creates a message for the plugin instance [instance].
   const AudShellMessage({this.instance = 0});
@@ -28,11 +28,9 @@ sealed class AudShellMessage {
         'command' => AudShellCommand.fromJson(json),
         'gesture' => AudShellGesture.fromJson(json),
         'param' => AudShellParamValue.fromJson(json),
-        'meter' => AudShellMeter.fromJson(json),
         'input' => AudShellInput.fromJson(json),
         'place' => AudShellPlace.fromJson(json),
         'cursor' => AudShellCursor.fromJson(json),
-        'probe' => AudShellProbe.fromJson(json),
         'preset' => AudShellPreset.fromJson(json),
         'selectPreset' => AudShellSelectPreset.fromJson(json),
         'midi' => AudShellMidi.fromJson(json),
@@ -443,15 +441,13 @@ final class AudShellGesture extends AudShellMessage {
 
 // #############################################################################
 /// A parameter changed in the plugin: through the host's automation, the
-/// generic view or a state load. [sequence] counts these messages, so the
-/// probes can follow one change to the screen.
+/// generic view or a state load.
 final class AudShellParamValue extends AudShellMessage {
   /// Creates the message.
   const AudShellParamValue({
     super.instance,
     required this.id,
     required this.value,
-    this.sequence = 0,
   });
 
   /// A message from [toJson].
@@ -459,7 +455,6 @@ final class AudShellParamValue extends AudShellMessage {
       AudShellParamValue(
         id: _int(json, 'id'),
         value: _double(json, 'value'),
-        sequence: (json['seq'] as num?)?.toInt() ?? 0,
         instance: _instance(json),
       );
 
@@ -469,44 +464,12 @@ final class AudShellParamValue extends AudShellMessage {
   /// The plain value.
   final double value;
 
-  /// The running number of the change.
-  final int sequence;
-
   @override
   Map<String, Object?> toJson() => {
     'type': 'param',
     'instance': instance,
     'id': id,
     'value': value,
-    'seq': sequence,
-  };
-}
-
-// #############################################################################
-/// The output meter of the plugin's graph.
-final class AudShellMeter extends AudShellMessage {
-  /// Creates the message.
-  const AudShellMeter({super.instance, required this.peak, required this.rms});
-
-  /// A message from [toJson].
-  factory AudShellMeter.fromJson(Map<String, Object?> json) => AudShellMeter(
-    instance: _instance(json),
-    peak: _double(json, 'peak'),
-    rms: _double(json, 'rms'),
-  );
-
-  /// The peak of the last block.
-  final double peak;
-
-  /// The root mean square of the last block.
-  final double rms;
-
-  @override
-  Map<String, Object?> toJson() => {
-    'type': 'meter',
-    'instance': instance,
-    'peak': peak,
-    'rms': rms,
   };
 }
 
@@ -721,35 +684,6 @@ final class AudShellCursor extends AudShellMessage {
 }
 
 // #############################################################################
-/// A measurement record of the editor that the plugin writes into its probe
-/// log, so that one file holds both processes' records.
-final class AudShellProbe extends AudShellMessage {
-  /// Creates the message.
-  const AudShellProbe(this.kind, this.fields, {super.instance});
-
-  /// A message from [toJson].
-  factory AudShellProbe.fromJson(Map<String, Object?> json) => AudShellProbe(
-    json['kind']! as String,
-    Map<String, Object?>.from(json['fields']! as Map<String, Object?>),
-    instance: _instance(json),
-  );
-
-  /// The kind of the record, e.g. `paramApplied`.
-  final String kind;
-
-  /// The fields of the record; `t` is the mach time in nanoseconds.
-  final Map<String, Object?> fields;
-
-  @override
-  Map<String, Object?> toJson() => {
-    'type': 'probe',
-    'instance': instance,
-    'kind': kind,
-    'fields': fields,
-  };
-}
-
-// #############################################################################
 /// The plugin's view is shown again: the instance's view resumes.
 final class AudShellShow extends AudShellMessage {
   /// Creates the message.
@@ -781,7 +715,9 @@ final class AudShellRemove extends AudShellMessage {
 }
 
 // #############################################################################
-/// The editor quits.
+/// To the editor: quit. The plugin of this package does not send it; it
+/// ends the connection instead, which ends [AudShellClient.messages]. An
+/// editor quits on either.
 final class AudShellClose extends AudShellMessage {
   /// Creates the message.
   const AudShellClose();
