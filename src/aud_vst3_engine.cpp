@@ -10,12 +10,17 @@
 #include <cmath>
 #include <cstring>
 
+#include "aud_clock.h"
+
+#include "aud_vst3_bundle.hpp"
+#include "aud_vst3_packages.hpp"
+
 namespace aud_vst3 {
 
 namespace {
 
-// How often the control thread reads the meter and takes notifications.
-constexpr int64_t kMeterPeriodNs = 33'000'000;
+// How often the control thread takes the graph's notifications.
+constexpr int64_t kNotificationPeriodNs = 33'000'000;
 
 // How long the control thread sleeps when nothing wakes it.
 constexpr int64_t kIdleWaitNs = 10'000'000;
@@ -27,11 +32,13 @@ constexpr int64_t kOfflineWaitNs = 100'000'000;
 // before it wakes the thread again.
 constexpr int64_t kOfflinePassNs = 2'000'000;
 
+// The ramp of a parameter change, in seconds: long enough that automation
+// steps at block boundaries do not click, short enough to follow it.
+constexpr double kRampSeconds = 0.005;
+
 float clamp(const EngineParam& param, float value) {
   return std::min(param.max, std::max(param.min, value));
 }
-
-float finite(float value) { return std::isfinite(value) ? value : 0.0f; }
 
 }  // namespace
 
@@ -39,9 +46,8 @@ float finite(float value) { return std::isfinite(value) ? value : 0.0f; }
 // Engine
 
 // .............................................................................
-Engine::Engine(Probe& probe)
-    : probe_(probe),
-      changes_(1024),
+Engine::Engine()
+    : changes_(1024),
       wake_(dispatch_semaphore_create(0)),
       drained_(dispatch_semaphore_create(0)) {
   thread_ = std::thread([this] { loop(); });
@@ -52,23 +58,7 @@ Engine::~Engine() {
   // No realtime call is in flight: Plugin::terminate waits for process().
   rtHost_.store(nullptr, std::memory_order_relaxed);
   run([this] {
-    if (graph_ != nullptr) {
-      AudGraphStats stats{};
-      stats.struct_size = sizeof(AudGraphStats);
-      aud_graph_get_stats(graph_, &stats);
-      probe_.write(
-          "engineStats",
-          "\"blocks\":" + std::to_string(stats.blocks_rendered) +
-              ",\"overloads\":" + std::to_string(stats.overloads) +
-              ",\"renderMaxNs\":" + std::to_string(stats.render_time_max_ns) +
-              ",\"realtimeViolations\":" +
-              std::to_string(stats.realtime_violations) + ",\"watchdog\":" +
-              (aud_graph_watchdog_enabled() ? "true" : "false") +
-              ",\"droppedParams\":" + std::to_string(droppedParams()) +
-              ",\"refusedParams\":" + std::to_string(refusedParams()) +
-              ",\"parkedParams\":" + std::to_string(parked_.size()));
-      aud_graph_stop(graph_);
-    }
+    if (graph_ != nullptr) aud_graph_stop(graph_);
     if (host_ != nullptr) aud_host_destroy(host_);
     if (graph_ != nullptr) aud_graph_destroy(graph_);
     host_ = nullptr;
@@ -89,8 +79,8 @@ Engine::~Engine() {
 }
 
 // .............................................................................
-bool Engine::open(const std::string& document, double sampleRate,
-                  uint32_t maxFrames, std::string* error) {
+bool Engine::open(const std::string& document, const std::string& baseDirectory,
+                  double sampleRate, uint32_t maxFrames, std::string* error) {
   bool ok = false;
   run([&] {
     const uint32_t outputChannels[] = {2};
@@ -105,16 +95,29 @@ bool Engine::open(const std::string& document, double sampleRate,
       if (error != nullptr) *error = "aud_graph_create failed";
       return;
     }
-    host_ = aud_host_create(graph_, nullptr);
+    if (!registerPackages(graph_, error)) return;
+    AudHostOptions options{};
+    options.struct_size = sizeof(AudHostOptions);
+    options.base_directory = baseDirectory.empty() ? nullptr : baseDirectory.c_str();
+    host_ = aud_host_create(graph_, &options);
     if (host_ == nullptr) {
       if (error != nullptr) *error = "aud_host_create failed";
       return;
     }
+    rampFrames_ = static_cast<uint32_t>(std::lround(sampleRate * kRampSeconds));
     ok = loadOnControl(document, error);
     if (ok) collectParams();
   });
   if (ok) rtHost_.store(host_, std::memory_order_release);
   return ok;
+}
+
+// .............................................................................
+const EngineParam* Engine::param(uint32_t id) const {
+  const auto it = std::lower_bound(
+      params_.begin(), params_.end(), id,
+      [](const EngineParam& p, uint32_t value) { return p.id < value; });
+  return it != params_.end() && it->id == id ? &*it : nullptr;
 }
 
 // .............................................................................
@@ -125,6 +128,7 @@ bool Engine::prepare(double sampleRate, uint32_t maxFrames) {
     const bool running = aud_graph_state(graph_) == AUD_GRAPH_RUNNING;
     if (running) aud_graph_stop(graph_);
     ok = aud_graph_prepare(graph_, sampleRate, maxFrames) == AUD_OK;
+    rampFrames_ = static_cast<uint32_t>(std::lround(sampleRate * kRampSeconds));
     if (running) aud_graph_start(graph_);
   });
   return ok;
@@ -146,34 +150,43 @@ bool Engine::setActive(bool active) {
 }
 
 // .............................................................................
-bool Engine::load(const std::string& document, std::string* error) {
-  bool ok = false;
+void Engine::setPresets(const std::vector<ShellPreset>* presets,
+                        std::function<void(uint32_t)> applied) {
   run([&] {
-    // Changes still waiting in the ring belong to the previous state.
-    drainParams();
-    ok = loadOnControl(document, error);
+    presets_ = presets;
+    presetApplied_ = std::move(applied);
+  });
+}
+
+// .............................................................................
+bool Engine::applyPreset(const ShellPreset& preset, std::string* error) {
+  bool ok = true;
+  run([&] {
+    if (host_ == nullptr) {
+      ok = false;
+      return;
+    }
+    for (const auto& [node, json] : preset.nodes) {
+      if (aud_host_apply_preset(host_, node.c_str(), json.data(), json.size()) !=
+          AUD_OK) {
+        // The other nodes still take their part: a sound with one node
+        // missing beats a mix of two presets.
+        ok = false;
+        if (error != nullptr) {
+          *error = "preset " + preset.id + ", node " + node + ": " +
+                   aud_host_last_error(host_);
+        }
+      }
+    }
   });
   return ok;
 }
 
 // .............................................................................
-std::string Engine::save() {
-  std::string text;
-  run([&] {
-    if (host_ == nullptr) return;
-    drainParams();
-    size_t size = 0;
-    if (aud_host_save(host_, nullptr, 0, &size) != AUD_ERROR_BUFFER_TOO_SMALL) {
-      return;
-    }
-    text.resize(size + 1);
-    if (aud_host_save(host_, &text[0], text.size(), &size) != AUD_OK) {
-      text.clear();
-      return;
-    }
-    text.resize(size);
-  });
-  return text;
+void Engine::requestPreset(uint32_t index) {
+  requestedPreset_.store(static_cast<int32_t>(index), std::memory_order_relaxed);
+  presetRequests_.fetch_add(1, std::memory_order_release);
+  dispatch_semaphore_signal(wake_);
 }
 
 // .............................................................................
@@ -191,28 +204,30 @@ float Engine::value(uint32_t id) {
 }
 
 // .............................................................................
-EngineMeter Engine::meter() const {
-  return {meterPeak_.load(std::memory_order_relaxed),
-          meterRms_.load(std::memory_order_relaxed)};
+void Engine::setParam(uint32_t id, float plain) {
+  run([&] {
+    if (host_ == nullptr) return;
+    drainParams();
+    if (const EngineParam* p = param(id)) passOn(id, clamp(*p, plain));
+  });
 }
 
 // .............................................................................
-void Engine::pushParam(uint32_t id, float plain, double normalized,
-                       int32_t offset) {
+void Engine::pushParam(uint32_t id, float plain) {
   if (changes_.push({id, plain})) {
     pushed_.fetch_add(1, std::memory_order_release);
   } else {
     droppedParams_.fetch_add(1, std::memory_order_relaxed);
   }
-  probe_.push({kProbeProcess, id, nowNs(), normalized, offset, 0});
   dispatch_semaphore_signal(wake_);
 }
 
 // .............................................................................
 void Engine::waitForParams() {
   const uint64_t target = pushed_.load(std::memory_order_acquire);
-  const int64_t deadline = nowNs() + kOfflineWaitNs;
-  while (taken_.load(std::memory_order_acquire) < target && nowNs() < deadline) {
+  const int64_t deadline = aud_clock_now_ns() + kOfflineWaitNs;
+  while (taken_.load(std::memory_order_acquire) < target &&
+         aud_clock_now_ns() < deadline) {
     dispatch_semaphore_signal(wake_);
     dispatch_semaphore_wait(drained_,
                             dispatch_time(DISPATCH_TIME_NOW, kOfflinePassNs));
@@ -220,34 +235,70 @@ void Engine::waitForParams() {
 }
 
 // .............................................................................
-void Engine::render(float* const* outputs, uint32_t channels, uint32_t frames,
-                    bool offline) {
+bool Engine::waitForPreset(uint32_t timeoutMs) {
+  const uint64_t target = presetRequests_.load(std::memory_order_acquire);
+  const int64_t deadline =
+      aud_clock_now_ns() + static_cast<int64_t>(timeoutMs) * 1'000'000;
+  while (presetsTaken_.load(std::memory_order_acquire) < target &&
+         aud_clock_now_ns() < deadline) {
+    dispatch_semaphore_signal(wake_);
+    dispatch_semaphore_wait(drained_,
+                            dispatch_time(DISPATCH_TIME_NOW, kOfflinePassNs));
+  }
+  const int64_t left = (deadline - aud_clock_now_ns()) / 1'000'000;
+  int32_t result = AUD_PENDING;
+  if (left > 0) {
+    run([&] {
+      if (host_ != nullptr) {
+        result = aud_host_wait_loads(host_, static_cast<uint32_t>(left));
+      }
+    });
+  }
+  return result == AUD_OK &&
+         presetsTaken_.load(std::memory_order_acquire) >= target;
+}
+
+// .............................................................................
+int32_t Engine::latency() {
+  int32_t result = 0;
+  run([&] {
+    if (host_ != nullptr) result = std::max(0, aud_host_latency(host_));
+  });
+  return result;
+}
+
+// .............................................................................
+uint32_t Engine::tail() {
+  uint32_t result = 0;
+  run([&] {
+    if (host_ != nullptr) result = aud_host_tail(host_);
+  });
+  return result;
+}
+
+// .............................................................................
+void Engine::render(const EngineBlock& block) AUD_VST3_NONBLOCKING {
   AudHost* host = rtHost_.load(std::memory_order_acquire);
   if (host == nullptr) {
-    for (uint32_t c = 0; c < channels; ++c) {
-      std::memset(outputs[c], 0, sizeof(float) * frames);
+    for (uint32_t c = 0; c < block.channels; ++c) {
+      std::memset(block.outputs[c], 0, sizeof(float) * block.frames);
     }
     return;
   }
-  // The changes the control thread passed on before this block starts; the
-  // engine applies its parameter queue at the block start.
-  const uint64_t passed = passed_.load(std::memory_order_acquire);
-  AudAudioBus bus{sizeof(AudAudioBus), channels, outputs};
+  AudAudioBus bus{sizeof(AudAudioBus), block.channels, block.outputs};
   AudRenderRequest request{};
   request.struct_size = sizeof(AudRenderRequest);
-  request.frames = frames;
+  request.frames = block.frames;
   request.num_output_buses = 1;
   request.outputs = &bus;
+  request.num_events = block.numEvents;
+  request.events = block.events;
+  request.transport = block.transport;
   AudHostRenderRequest hostRequest{};
   hostRequest.struct_size = sizeof(AudHostRenderRequest);
-  hostRequest.flags = offline ? AUD_PROCESS_OFFLINE : 0;
+  hostRequest.flags = block.offline ? AUD_PROCESS_OFFLINE : 0;
   hostRequest.request = &request;
   aud_host_render(host, &hostRequest);
-  if (passed != rendered_) {
-    rendered_ = passed;
-    probe_.push({kProbeRendered, 0, nowNs(), static_cast<double>(passed), 0,
-                 0});
-  }
 }
 
 // .............................................................................
@@ -280,12 +331,12 @@ void Engine::loop() {
       done_.notify_all();
     }
     drainParams();
-    const int64_t now = nowNs();
-    if (now - lastMeterNs_ >= kMeterPeriodNs) {
-      lastMeterNs_ = now;
-      readMeter();
+    applyRequestedPreset();
+    const int64_t now = aud_clock_now_ns();
+    if (now - lastNotificationsNs_ >= kNotificationPeriodNs) {
+      lastNotificationsNs_ = now;
+      takeNotifications();
     }
-    probe_.drain();
   }
 }
 
@@ -298,7 +349,6 @@ bool Engine::loadOnControl(const std::string& document, std::string* error) {
     }
     return false;
   }
-  meterNode_ = aud_host_node(host_, "meter");
   return true;
 }
 
@@ -327,6 +377,8 @@ void Engine::collectParams() {
     entry.steps = d->steps;
     params_.push_back(entry);
   }
+  std::sort(params_.begin(), params_.end(),
+            [](const EngineParam& a, const EngineParam& b) { return a.id < b.id; });
 }
 
 void Engine::drainParams() {
@@ -339,11 +391,9 @@ void Engine::drainParams() {
   uint64_t taken = 0;
   while (changes_.pop(change)) {
     ++taken;
-    const auto it = std::find_if(
-        params_.begin(), params_.end(),
-        [&](const EngineParam& p) { return p.id == change.id; });
-    if (it == params_.end()) continue;
-    passOn(change.id, clamp(*it, change.plain));
+    const EngineParam* p = param(change.id);
+    if (p == nullptr) continue;
+    passOn(change.id, clamp(*p, change.plain));
   }
   if (taken > 0) {
     taken_.fetch_add(taken, std::memory_order_release);
@@ -351,14 +401,28 @@ void Engine::drainParams() {
   }
 }
 
+void Engine::applyRequestedPreset() {
+  const uint64_t requests = presetRequests_.load(std::memory_order_acquire);
+  if (presetsTaken_.load(std::memory_order_relaxed) >= requests) return;
+  const int32_t index = requestedPreset_.exchange(-1, std::memory_order_relaxed);
+  if (index >= 0 && presets_ != nullptr &&
+      static_cast<size_t>(index) < presets_->size()) {
+    std::string error;
+    if (!applyPreset((*presets_)[static_cast<size_t>(index)], &error)) {
+      logError(error);
+    }
+    if (presetApplied_) presetApplied_(static_cast<uint32_t>(index));
+  }
+  presetsTaken_.store(requests, std::memory_order_release);
+  dispatch_semaphore_signal(drained_);
+}
+
 // Hands one change to the host. The graph's queue refuses it while no block
 // drains the queue (a host flushing parameters with empty process calls);
 // then the change is parked, newest value per id, and passed on again with
-// the next drain. aud_host_set_param keeps a refused value out of the
-// host's table, so save() misses a change parked at that moment.
+// the next drain.
 bool Engine::passOn(uint32_t id, float value) {
-  if (aud_host_set_param(host_, id, value, 0) != AUD_OK) {
-    refusedParams_.fetch_add(1, std::memory_order_relaxed);
+  if (aud_host_set_param(host_, id, value, rampFrames_) != AUD_OK) {
     for (ParamChange& parked : parked_) {
       if (parked.id == id) {
         parked.plain = value;
@@ -368,24 +432,11 @@ bool Engine::passOn(uint32_t id, float value) {
     parked_.push_back({id, value});
     return false;
   }
-  const uint64_t sequence = passed_.fetch_add(1, std::memory_order_release) + 1;
-  probe_.write("applied", "\"id\":" + std::to_string(id) +
-                              ",\"plain\":" + probeNumber(value) +
-                              ",\"sequence\":" + std::to_string(sequence));
   return true;
 }
 
-void Engine::readMeter() {
-  if (graph_ == nullptr || meterNode_ <= 0) return;
-  float peak = 0;
-  float rms = 0;
-  float peakRight = 0;
-  float rmsRight = 0;
-  aud_graph_tap_meter(graph_, meterNode_, 0, &peak, &rms);
-  aud_graph_tap_meter(graph_, meterNode_, 1, &peakRight, &rmsRight);
-  // A graph that blows up must not send NaN to the editors.
-  meterPeak_.store(finite(std::max(peak, peakRight)), std::memory_order_relaxed);
-  meterRms_.store(finite(std::max(rms, rmsRight)), std::memory_order_relaxed);
+void Engine::takeNotifications() {
+  if (graph_ == nullptr) return;
   AudGraphNotification notifications[32];
   for (auto& n : notifications) n.struct_size = sizeof(AudGraphNotification);
   while (aud_graph_take_notifications(graph_, notifications, 32) == 32) {

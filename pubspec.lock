@@ -5,18 +5,18 @@ packages:
     dependency: transitive
     description:
       name: _fe_analyzer_shared
-      sha256: "48e48f73a431eb269eec66d243a63a07ed90ef9417a74047a3b98d52338626ad"
+      sha256: "9bfb8122e2505aca17219018593c384a87166cfe860d11c7ae927e7f978eb05f"
       url: "https://pub.dev"
     source: hosted
-    version: "109.0.0"
+    version: "110.0.0"
   analyzer:
     dependency: transitive
     description:
       name: analyzer
-      sha256: "6d377901d198536b648172974d9d4f277910502cad92193466869cac0ff34990"
+      sha256: "74c36179c4de542efea24c9dff78324375e4b118a2c1e14e8a7659f457947f8d"
       url: "https://pub.dev"
     source: hosted
-    version: "14.5.0"
+    version: "14.6.0"
   args:
     dependency: transitive
     description:
@@ -37,28 +37,27 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      resolved-ref: d9559d094faa63ffae9f292139a214974e33df18
+      resolved-ref: "09cde0a9a374743e08c19d5396841f3b96331d8a"
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_core.git"
     source: git
-    version: "0.4.0"
+    version: "0.5.3"
   aud_audio_graph:
     dependency: "direct main"
     description:
       path: "."
-      resolved-ref: "96a779f8373327d5a0ad396e4124bbda8aa7eb8d"
+      resolved-ref: ca9f30481ff1c7898575f28563ceac7ad9fec3b2
       tag-pattern: "{{version}}"
       url: "git@github.com:audaudio/aud_audio_graph.git"
     source: git
-    version: "0.4.0"
+    version: "0.5.4"
   aud_midi_standard:
     dependency: transitive
     description:
-      path: "."
-      resolved-ref: b45c6aa1cd74b7074be43ba0ff34fb939eec417d
-      tag-pattern: "{{version}}"
-      url: "https://github.com/audmidi/aud_midi_standard.git"
-    source: git
+      name: aud_midi_standard
+      sha256: "6ce86e854c3e2f510b6e48de194e4a1b020f2c4568e5fa52e464771847b6043e"
+      url: "https://pub.dev"
+    source: hosted
     version: "0.1.0"
   boolean_selector:
     dependency: transitive
@@ -76,6 +75,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.0"
+  cli_util:
+    dependency: transitive
+    description:
+      name: cli_util
+      sha256: "89b8801ba49f8b593fbf2d3e59efd0f566c46cd4ba6837ae2610c72b52a0f899"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.6.0"
   code_assets:
     dependency: transitive
     description:
@@ -112,10 +119,10 @@ packages:
     dependency: transitive
     description:
       name: coverage
-      sha256: "956a3de0725ca232ad353565a8290d3357592bf4250f6f298a185e2d949c5d3d"
+      sha256: ff89e37c19355194e279d26dafe8e4bece46c9ea63a30be4dc68214f5bc290d3
       url: "https://pub.dev"
     source: hosted
-    version: "1.15.1"
+    version: "1.16.0"
   crypto:
     dependency: transitive
     description:
@@ -197,7 +204,7 @@ packages:
     source: hosted
     version: "0.2.4"
   ffi:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: ffi
       sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
@@ -224,10 +231,10 @@ packages:
     dependency: transitive
     description:
       name: frontend_server_client
-      sha256: "404dbf9bce29beafbe9dcb19219447b6f7d49900cd42b8d3b7af102b24508e25"
+      sha256: "2b56423afc7651a81da53ed3a4f9f51e92572293f54d0d54e19b759f13714849"
       url: "https://pub.dev"
     source: hosted
-    version: "4.1.0"
+    version: "4.2.0"
   gg_args:
     dependency: transitive
     description:
@@ -296,10 +303,10 @@ packages:
     dependency: "direct dev"
     description:
       name: helix
-      sha256: cf433c4c14b6eaa167cf5521c9608c0065fe3005cf977f8c818e45c8b8b96e31
+      sha256: "10aa0e08729e50a7e38079c438538e562e81413ed249ae948d0dcaacdb052402"
       url: "https://pub.dev"
     source: hosted
-    version: "1.11.0"
+    version: "1.13.0"
   hooks:
     dependency: transitive
     description:
@@ -312,10 +319,10 @@ packages:
     dependency: transitive
     description:
       name: http_multi_server
-      sha256: aa6199f908078bb1c5efb8d8638d4ae191aac11b311132c3ef48ce352fb52ef8
+      sha256: "361668bdd71f0ae2dc6d17b75a593520f3c414af6534f9eed1aa72049dd71d18"
       url: "https://pub.dev"
     source: hosted
-    version: "3.2.2"
+    version: "3.2.3"
   http_parser:
     dependency: transitive
     description:
@@ -464,10 +471,10 @@ packages:
     dependency: transitive
     description:
       name: shelf
-      sha256: e7dd780a7ffb623c57850b33f43309312fc863fb6aa3d276a754bb299839ef12
+      sha256: e75e9cf311d7fd712048038cc17c25199c38536c20330d53e7db058b543d5a48
       url: "https://pub.dev"
     source: hosted
-    version: "1.4.2"
+    version: "1.4.3"
   shelf_packages_handler:
     dependency: transitive
     description:
@@ -480,10 +487,10 @@ packages:
     dependency: transitive
     description:
       name: shelf_static
-      sha256: c87c3875f91262785dade62d135760c2c69cb217ac759485334c5857ad89f6e3
+      sha256: "480504af9e5323899c5be26a4f6c2fc4437d50954d39842f0290f4ae733d57b4"
       url: "https://pub.dev"
     source: hosted
-    version: "1.1.3"
+    version: "1.2.0"
   shelf_web_socket:
     dependency: transitive
     description:
@@ -584,10 +591,10 @@ packages:
     dependency: transitive
     description:
       name: vm_service
-      sha256: "5f37239c4851efcef929cea7824e76df7f2f0970aef85d66bbc430afa40e72f0"
+      sha256: "89b11d62e1040ee681af3b4f1c97a803ecbf010c6e8b9c5896ee5b08c3bf7b78"
       url: "https://pub.dev"
     source: hosted
-    version: "15.3.0"
+    version: "15.4.0"
   watcher:
     dependency: transitive
     description:

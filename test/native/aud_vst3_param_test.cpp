@@ -12,16 +12,21 @@
 #include <string>
 #include <vector>
 
+#include "pluginterfaces/base/smartpointer.h"
+
 #include "aud_audio_graph.h"
 
 #include "aud_vst3_harness.hpp"
 
+using aud_vst3::AudParameter;
 using aud_vst3::EngineParam;
 using aud_vst3::ParamMapping;
+using aud_vst3::writeUtf16;
 using aud_vst3_test::expectEqual;
 using aud_vst3_test::expectNear;
 using aud_vst3_test::group;
 using aud_vst3_test::test;
+using Steinberg::Vst::String128;
 
 namespace {
 
@@ -32,6 +37,20 @@ struct Case {
 };
 
 using Cases = std::initializer_list<Case>;
+
+// A text, what it holds, and the UTF-16 code units writeUtf16 makes of it.
+struct TextCase {
+  std::string what;
+  std::string text;
+  std::vector<int> units;
+};
+
+// The UTF-16 code units of `string` before its terminator.
+std::vector<int> unitsOf(const char16_t* string) {
+  std::vector<int> units;
+  for (; *string != 0; ++string) units.push_back(*string);
+  return units;
+}
 
 }  // namespace
 
@@ -177,6 +196,122 @@ int main() {
                      normalized, 1e-9);
         });
       }
+    });
+  });
+
+  group("writeUtf16(text, string, size)", [&] {
+    test("writes a non-ASCII text as UTF-16", [&] {
+      String128 string;
+      writeUtf16("Flügel", string, 128);
+      expectEqual(unitsOf(string),
+                  std::vector<int>{'F', 'l', 0xFC, 'g', 'e', 'l'});
+    });
+
+    for (const TextCase& c : std::vector<TextCase>{
+             {"a character of three bytes as one unit", "€", {0x20AC}},
+             {"a character beyond 0xFFFF as a surrogate pair",
+              "🎹",
+              {0xD83C, 0xDFB9}},
+             {"U+10FFFF as the last surrogate pair",
+              "\xF4\x8F\xBF\xBF",
+              {0xDBFF, 0xDFFF}},
+         }) {
+      test("writes " + c.what, [&] {
+        String128 string;
+        writeUtf16(c.text, string, 128);
+        expectEqual(unitsOf(string), c.units);
+      });
+    }
+
+    test("cuts the text to the size and terminates it", [&] {
+      String128 string;
+      writeUtf16("Flügel", string, 4);
+      expectEqual(unitsOf(string), std::vector<int>{'F', 'l', 0xFC});
+    });
+
+    test("cuts before a surrogate pair that does not fit", [&] {
+      String128 string;
+      writeUtf16("a🎹", string, 3);
+      expectEqual(unitsOf(string), std::vector<int>{'a'});
+    });
+
+    for (const TextCase& c : std::vector<TextCase>{
+             {"a byte no sequence starts with",
+              "Fl\xFC" "gel",
+              {'F', 'l', 0xFC, 'g', 'e', 'l'}},
+             {"a sequence cut at its end", "Fl\xC3", {'F', 'l', 0xC3}},
+             {"a sequence without its continuation byte",
+              "\xC3g",
+              {0xC3, 'g'}},
+             {"an overlong sequence", "a\xC0\xAF", {'a', 0xC0, 0xAF}},
+             {"an overlong sequence of three bytes",
+              "\xE0\x80\xAF",
+              {0xE0, 0x80, 0xAF}},
+             {"a surrogate", "\xED\xA0\x80", {0xED, 0xA0, 0x80}},
+             {"a value above U+10FFFF",
+              "\xF4\x90\x80\x80",
+              {0xF4, 0x90, 0x80, 0x80}},
+             {"a valid character before a bad byte",
+              "ü\xFF",
+              {0xC3, 0xBC, 0xFF}},
+         }) {
+      test("reads a text with " + c.what + " as Latin-1", [&] {
+        String128 string;
+        writeUtf16(c.text, string, 128);
+        expectEqual(unitsOf(string), c.units);
+      });
+    }
+
+    test("terminates an empty text", [&] {
+      String128 string = {'x', 0};
+      writeUtf16("", string, 128);
+      expectEqual(unitsOf(string), std::vector<int>{});
+    });
+  });
+
+  // A parameter from 0 to 360 named `name` with the unit `unit`.
+  const auto paramOf = [](const std::string& name, const std::string& unit) {
+    EngineParam param;
+    param.id = 7;
+    param.nodeId = "flügel";
+    param.name = name;
+    param.unit = unit;
+    param.max = 360;
+    return param;
+  };
+
+  group("AudParameter", [&] {
+    group("AudParameter(param, title)", [&] {
+      test("writes the non-ASCII names and unit of the graph", [&] {
+        const auto parameter =
+            Steinberg::owned(new AudParameter(paramOf("Lautstärke", "°")));
+        const Steinberg::Vst::ParameterInfo& info = parameter->getInfo();
+        const std::vector<std::vector<int>> texts = {
+            unitsOf(info.title), unitsOf(info.shortTitle), unitsOf(info.units)};
+        expectEqual(texts, std::vector<std::vector<int>>{
+                               unitsOf(u"flügel Lautstärke"),
+                               unitsOf(u"Lautstärke"), unitsOf(u"°")});
+      });
+
+      test("writes a non-ASCII title as both titles", [&] {
+        const auto parameter = Steinberg::owned(
+            new AudParameter(paramOf("Lautstärke", ""), "Hallgröße"));
+        const Steinberg::Vst::ParameterInfo& info = parameter->getInfo();
+        const std::vector<std::vector<int>> titles = {
+            unitsOf(info.title), unitsOf(info.shortTitle)};
+        expectEqual(titles, std::vector<std::vector<int>>{
+                                unitsOf(u"Hallgröße"), unitsOf(u"Hallgröße")});
+      });
+    });
+
+    group("toString(normalized, string)", [&] {
+      test("writes the value with a non-ASCII unit", [&] {
+        const auto parameter =
+            Steinberg::owned(new AudParameter(paramOf("Winkel", "°")));
+        String128 string;
+        parameter->toString(0.25, string);
+        expectEqual(unitsOf(string), unitsOf(u"90.00 °"));
+      });
     });
   });
   return aud_vst3_test::finish();

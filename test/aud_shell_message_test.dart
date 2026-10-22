@@ -70,6 +70,50 @@ void main() {
         'height': 220,
         'scale': 2,
         'version': audShellProtocolVersion,
+        'presets': <Object?>[],
+        'preset': -1,
+      },
+    ),
+    (
+      const AudShellWelcome(
+        instance: 2,
+        name: 'Audanika',
+        params: [],
+        width: 1024,
+        height: 640,
+        scale: 2,
+        presets: [AudShellPresetInfo(id: 'a', name: 'A')],
+        preset: 0,
+      ),
+      {
+        'type': 'welcome',
+        'instance': 2,
+        'name': 'Audanika',
+        'params': <Object?>[],
+        'width': 1024,
+        'height': 640,
+        'scale': 2,
+        'version': audShellProtocolVersion,
+        'presets': [
+          {'id': 'a', 'name': 'A'},
+        ],
+        'preset': 0,
+      },
+    ),
+    (
+      const AudShellPreset(3, instance: 1),
+      {'type': 'preset', 'instance': 1, 'index': 3},
+    ),
+    (
+      const AudShellSelectPreset(4, instance: 1),
+      {'type': 'selectPreset', 'instance': 1, 'index': 4},
+    ),
+    (
+      const AudShellMidi([0x90, 60, 100], instance: 1),
+      {
+        'type': 'midi',
+        'instance': 1,
+        'bytes': [0x90, 60, 100],
       },
     ),
     (
@@ -96,12 +140,8 @@ void main() {
       },
     ),
     (
-      const AudShellParamValue(id: 7, value: 1500, sequence: 3),
-      {'type': 'param', 'instance': 0, 'id': 7, 'value': 1500, 'seq': 3},
-    ),
-    (
-      const AudShellMeter(peak: 0.5, rms: 0.25),
-      {'type': 'meter', 'instance': 0, 'peak': 0.5, 'rms': 0.25},
+      const AudShellParamValue(id: 7, value: 1500),
+      {'type': 'param', 'instance': 0, 'id': 7, 'value': 1500},
     ),
     (
       const AudShellInput(
@@ -158,15 +198,6 @@ void main() {
     (
       const AudShellCursor('resizeUpDown'),
       {'type': 'cursor', 'instance': 0, 'kind': 'resizeUpDown'},
-    ),
-    (
-      const AudShellProbe('paramApplied', {'seq': 3, 't': 10}),
-      {
-        'type': 'probe',
-        'instance': 0,
-        'kind': 'paramApplied',
-        'fields': {'seq': 3, 't': 10},
-      },
     ),
     (const AudShellShow(instance: 2), {'type': 'show', 'instance': 2}),
     (const AudShellHide(instance: 2), {'type': 'hide', 'instance': 2}),
@@ -243,19 +274,6 @@ void main() {
         'instance': 0,
         'command': setParam.toJson(),
         'input': 0,
-      });
-    });
-  });
-
-  group('AudShellParamValue.fromJson(json)', () {
-    test('defaults the sequence to 0', () {
-      final copy = AudShellParamValue.fromJson({'id': 1, 'value': 2});
-      expect(copy.toJson(), {
-        'type': 'param',
-        'instance': 0,
-        'id': 1,
-        'value': 2,
-        'seq': 0,
       });
     });
   });

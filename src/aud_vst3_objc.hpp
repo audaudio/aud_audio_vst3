@@ -4,14 +4,14 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// The NSView class of the spike's editors, created at run time (ticket 24).
+// The NSView class of the plugin's editor view, created at run time
+// (tickets 24 and 37).
 //
 // Objective-C has one class namespace per process. Two plugins that both
 // define a class of the same name share one of the two implementations -
 // "which one is undefined" - so an aud_audio-based plugin creates its view
-// class at run time under a name with a random suffix, as JUCE does. The
-// control build (AUD_VST3_NO_HYGIENE) registers a fixed name and reuses a
-// class of that name that another image registered first.
+// class at run time under a name with a random suffix, as JUCE does
+// (plugin-004).
 //
 // The class forwards its events to a ViewDelegate, a C++ object whose
 // pointer it keeps in an instance variable.
@@ -82,12 +82,7 @@ NSView* makeView(ViewDelegate* delegate, NSRect frame);
 void clearDelegate(NSView* view);
 
 // #############################################################################
-// The flavor of the image whose code implements the class methods: the
-// class of another image answers with that image's flavor.
-int implementationFlavor(NSView* view);
-
-// #############################################################################
-// The time of `event` in nanoseconds, on the clock of the probe's stamps.
+// The time of `event` in nanoseconds since the system started.
 int64_t stampOf(NSEvent* event);
 
 }  // namespace aud_vst3

@@ -4,31 +4,65 @@ VST3 shell of the Audanika Audio Engine over its headless host.
 
 Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/audaudio/aud_audio_pm).
 
-## What the package holds (0.1.0, ticket 24)
+## What the package holds (ticket 37)
 
-The spike S0-plugin-ui: a VST3 plugin for macOS on Apple silicon over the
-headless host of `aud_audio_graph`, with a Flutter editor. Decision
-plugin-003 rests on its measurements; the shell itself is step S18.
+The VST3 shell of the engine (step S18, macOS on Apple silicon): an
+instrument plugin over the headless host of `aud_audio_graph` that an app
+configures with three files - `plugin.json`, a graph document and its
+presets ([doc/plugin-bundle.md](doc/plugin-bundle.md)) - and builds with
+the node packages it names linked in.
 
-- The plugin (`src/`): a single-component effect that renders a graph
-  document from its bundle through `aud_host_render`, with one VST3
-  parameter per graph parameter under its stable id and the document as
-  its state. The headless host runs on a control thread; the audio thread
-  only renders. The editor comes in six variants:
-  - A: a Flutter app in a process of its own per editor, shown through
-    shared IOSurfaces, with the input forwarded over a Unix domain socket
-  - S: like A, one editor process for every editor of a plugin build
-  - F: like A, the editor's own window follows the plugin's view
-  - B: Flutter in the DAW process, from a renamed copy of the framework
-  - C: a native view; D: the host's generic view
-- Symbol hygiene: the bundle exports only the three VST3 entry points, and
-  its Objective-C classes are created at run time under names with a
-  random suffix, so that two builds coexist in one DAW process.
-- The shell protocol in Dart (`lib/`): `AudShellMessage`, the framing codec
-  and `AudShellClient` over a Unix domain socket; see [Dart API](#dart-api).
-- The editor app (`editor/`): `AudParamKnob`s of `aud_audio_ui_controls`
-  bound to the plugin through `AudShellParamSink`: over the socket in A, S
-  and F, over a method channel in B (`--inprocess`).
+- The plugin (`src/`): a single-component instrument that renders the
+  app's graph document through `aud_host_render`.
+  - Presets: the program list and the stepped parameter "Preset"; a preset
+    applies its node presets on a control thread.
+  - Parameters: the graph parameters the configuration lists, under their
+    stable ids, and controls that send MIDI control changes when they move.
+  - MIDI: the DAW's notes and poly pressure, and through `IMidiMapping`
+    its control changes, channel pressure and pitch bend on 16 channels,
+    reach the graph's event input at their sample offsets; the reference
+    node `aud.graph.channel_split` sends each channel to its node.
+  - Transport: the DAW's tempo, time signature and position; while the DAW
+    stands the transport runs on at its tempo, so that tempo-synced
+    modulation keeps moving.
+  - State: the preset, the parameter values and the moved controls as JSON,
+    never a path. Offline rendering waits for the instrument of a preset.
+  - Assets: the content of the app the plugin ships in, found through the
+    link a DAW loads it by, or through the app's bundle id.
+  - Symbol hygiene (plugin-004): the bundle exports only the three VST3
+    entry points; the node packages are compiled in with hidden symbols.
+- The build (`scripts/build-plugin.js`): the vendored SDK, the graph, the
+  node packages by recipes after their build hooks (sfizz and QuickJS-ng
+  from their manifests), `Info.plist`, `moduleinfo.json`, the notices, a
+  signature with the hardened runtime.
+- The example plugin (`example/plugin`): an oscillator through a filter,
+  the graph's own nodes, for the tests.
+- The test host (`test/host/aud_vst3_host.mm`): loads a bundle as a DAW
+  does and checks that every preset sounds offline, the program list,
+  the MIDI mapping, the state across two instances and the time of
+  realtime blocks; it writes each preset's sound as WAV on request. With
+  `--editor` it shows the editor in a window that takes no focus, waits for
+  its frames, clicks into it and expects the editor's notes on the plugin's
+  event output and a new frame for every click - also while other
+  processes keep the shared surfaces in use, during a live resize, after a
+  resize without `onSize`, under a covering window, and with a held note
+  when the editor is killed.
+- The editor (decision plugin-003, variant S; `src/aud_vst3_editor.mm`):
+  the Flutter app the configuration names under `editor`, copied into the
+  bundle's `Contents/Helpers` by `build-plugin.js --editor <app>`. One
+  editor process serves every instance of a plugin build in the DAW, one
+  Flutter view per instance, shown through shared IOSurfaces. The plugin
+  starts it with a connected socket on file descriptor 3 and finds its
+  surfaces under a Mach name prefixed with the configuration's
+  `appGroup`, so that a sandboxed editor reaches both (decision
+  plugin-007). The editor plays MIDI through the plugin, which also sends
+  it to the DAW on its event output, and chooses the plugin's preset. The
+  plugin pauses the editor only while its window is invisible, minimized
+  or on another Space, sends any change of position, size or scale within
+  0.1 s, and ends the notes the editor holds when the editor ends. Plugin
+  and editor log visibility changes, late frames and stalls to the unified
+  log; `AUD_VST3_LOG=<file>` collects their lines in a test. Without
+  `editor` the plugin shows the DAW's generic view.
 - The subset of the VST3 SDK 3.8.1 (MIT) in `src/third_party/vst3sdk`; see
   `src/third_party/NOTICES.md`.
 
@@ -36,7 +70,10 @@ plugin-003 rests on its measurements; the shell itself is step S18.
 
 `aud_audio_vst3.dart` is the editor's end of the shell protocol between the
 plugin and its editor process: JSON messages, framed by `AudShellCodec`,
-over the Unix domain socket the plugin listens on.
+over the socket the plugin hands the editor as file descriptor 3
+(`AudShellClient.fromFd`, read and written by `AudShellFd` through FFI,
+since `dart:io` opens no inherited socket), or over a Unix domain socket
+the plugin listens on (`AudShellClient.connect`).
 `example/aud_audio_vst3_example.dart` runs both ends in one process.
 
 ```dart
@@ -56,22 +93,27 @@ editor.send(                                         // a knob moved
 await editor.close();                                // both directions at once
 ```
 
-- `AudShellClient.connect(path, hello)` connects and sends the
-  `AudShellHello` with the token the plugin started the editor with;
+- `AudShellClient.fromFd(fd, hello)` and `AudShellClient.connect(path,
+  hello)` connect and send the `AudShellHello` with the token the plugin
+  started the editor with;
   `messages` carries the plugin's messages and ends when the plugin closes
   the socket, `send(message)` frames a message to the plugin, `close()`
   ends both directions.
 - From the plugin: `AudShellWelcome` (the document's `AudShellParam`s, the
-  editor's size and scale), `AudShellParamValue` (a parameter changed in
-  the plugin, with its sequence number), `AudShellMeter`, `AudShellInput`
-  (an input event of the plugin's view, of an `AudShellInputKind`),
-  `AudShellPlace` (where the plugin's view is on the screen),
-  `AudShellShow`, `AudShellHide`, `AudShellRemove` and `AudShellClose`.
-- To the plugin: `AudShellHello`, `AudShellCommand` (an `AudCommand` of
-  `aud_audio_core` with the time stamp of the input behind it),
+  editor's size and scale, the presets as `AudShellPresetInfo`s and the
+  current one), `AudShellPreset` (the plugin plays another preset),
+  `AudShellParamValue` (a parameter changed in the plugin),
+  `AudShellInput` (an input event of the plugin's view, of an
+  `AudShellInputKind`), `AudShellPlace` (where the plugin's view is on the
+  screen), `AudShellShow`, `AudShellHide` and `AudShellRemove`.
+- To the editor: `AudShellClose` (quit); the plugin of this package does
+  not send it, it ends the connection instead.
+- To the plugin: `AudShellHello`, `AudShellMidi` (MIDI 1.0 bytes the
+  plugin plays and sends to the DAW), `AudShellSelectPreset`,
+  `AudShellCommand` (an `AudCommand` of `aud_audio_core` with the time
+  stamp of the input behind it),
   `AudShellGesture` (`AudShellGesturePhase.begin` and `end` of an
-  automation edit), `AudShellCursor` and `AudShellProbe` (a measurement
-  record for the plugin's probe log).
+  automation edit) and `AudShellCursor`.
 - Every message names the plugin `instance` it belongs to;
   `AudShellMessage.fromJson` reads what `toJson` writes.
 - `AudShellCodec.encode(message)` frames a message: a 4-byte little-endian
@@ -83,30 +125,31 @@ await editor.close();                                // both directions at once
 - `audShellProtocolVersion` is the protocol version hello and welcome
   carry, `audAudioVst3Version` the version of the package.
 
-## Build and measure
+## Build and test
 
 ```bash
-node scripts/vendor-vst3sdk.js
-node scripts/build-plugin.js --variant S --editor --install
+node scripts/build-plugin.js
+node scripts/host.js
 node scripts/validate.js
 node scripts/test-native.js
-node scripts/spike-host.js --plugin build/vst3/AudSpikeS1.vst3 --scenario test
-node scripts/reaper-series.js --only "^open"
 ```
 
-`vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
-`src/third_party/vst3sdk` and writes `src/third_party/NOTICES.md`
-(`--sdk <checkout>`, `--tag`, `--dest`: a folder directly inside
-`src/third_party`). `build-plugin.js` builds the bundles with clang into
-`build/vst3` (`--variant`, `--flavor 2` against graph 0.3.0,
-`--no-hygiene`, `--rtsan`, `--watchdog`, `--flutter <sdk>`).
+`build-plugin.js` builds the example plugin into `build/vst3`; an app
+builds its own with `--config <plugin.json> --package-config
+<.dart_tool/package_config.json>`, copies its editor app into the bundle
+with `--editor <app>` and signs it with `--sign <identity>` (`--out`,
+`--install`, `--rtsan`, `--watchdog`). `host.js` builds the
+example plugin and runs the test host on it, or on the bundle it is given
+(`--wav <dir>`, `--presets n`, `--realtime-seconds s`, `--editor s`
+with `--snapshot <png>`, `--click x,y`, `--clicks n`, `--click-pause s`,
+`--cover`, `--hold-surfaces` and `--hold-seconds s`, `--resize-steps n`,
+`--reframe`, `--occlude` and `--kill-editor`). `validate.js` runs
+the SDK's validator on the bundles of `build/vst3` or on the given ones.
 `test-native.js` builds and runs the unit tests of the native code in
-`test/native`. `spike-host.js` runs a test host with the scenarios of the
-spike,
-`reaper.js` and `reaper-series.js` run them in REAPER, and
-`analyze-probe.js` summarizes the probes the plugins write to
-`~/Library/Logs/aud_audio_vst3`.
+`test/native`. `reaper-test.js` tests an installed plugin in REAPER: found,
+rendered offline with presets (`--render 0,13,27 --presets 28`), played
+live, its preset restored with the project, its editor shown and captured
+(`--plugin <name>`, `--show-editor s`).
+`vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
+`src/third_party/vst3sdk` and writes `src/third_party/NOTICES.md`.
 
-Until `aud_audio_ui_controls` 0.1.0 is released, the editor builds against
-the checkout of `aud_audio_ui_controls` next to this repo
-(`editor/pubspec_overrides.yaml`).

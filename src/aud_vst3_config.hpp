@@ -4,38 +4,55 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// The build configuration of the spike plugin (ticket 24, S0-plugin-ui).
-// scripts/build-plugin.js builds one bundle per variant and flavor:
+// The identity of a plugin build (ticket 37). scripts/build-plugin.js
+// defines it from the plugin.json of the app that builds the plugin; the
+// defaults below are those of the package's example plugin and serve the
+// native tests.
 //
-// - AUD_VST3_VARIANT: the editor. 'A' Flutter in a separate process,
-//   embedded through shared IOSurfaces, one process per open editor; 'S'
-//   the same with one process for every instance of the build in the DAW
-//   process; 'F' the editor process in a window that follows the editor
-//   rectangle (A's comparison); 'B'
-//   Flutter in the DAW process; 'C' a native AppKit view; 'D' no view,
-//   the host's generic one.
-// - AUD_VST3_FLAVOR: 1 or 2, the engine flavor of the two-engine test.
-//   Flavor 2 builds against another graph version and changes the layout
-//   of an inline type (aud_vst3_skew.hpp).
-// - AUD_VST3_NO_HYGIENE: the control build of that test - fixed
-//   Objective-C class names and default symbol visibility.
+// - AUD_VST3_NAME, AUD_VST3_VENDOR, AUD_VST3_URL, AUD_VST3_EMAIL: the class
+//   and its vendor as the DAW lists them
+// - AUD_VST3_VERSION: the version of the class
+// - AUD_VST3_BUNDLE_ID: the bundle id, also the subsystem of the log
+// - AUD_VST3_SUBCATEGORIES: e.g. "Instrument|Synth"
+// - AUD_VST3_CID0 to AUD_VST3_CID3: the class id, four 32-bit words that
+//   never change once a DAW project uses the plugin
 
 #ifndef AUD_VST3_CONFIG_HPP
 #define AUD_VST3_CONFIG_HPP
 
-// #############################################################################
-// The defaults for a build without the defines: variant D, flavor 1 and
-// the version of the spike.
-#ifndef AUD_VST3_VARIANT
-#define AUD_VST3_VARIANT 'D'
+#ifndef AUD_VST3_NAME
+#define AUD_VST3_NAME "Aud Example"
 #endif
 
-#ifndef AUD_VST3_FLAVOR
-#define AUD_VST3_FLAVOR 1
+#ifndef AUD_VST3_VENDOR
+#define AUD_VST3_VENDOR "Audanika"
+#endif
+
+#ifndef AUD_VST3_URL
+#define AUD_VST3_URL "https://github.com/audaudio/aud_audio_vst3"
+#endif
+
+#ifndef AUD_VST3_EMAIL
+#define AUD_VST3_EMAIL "mailto:info@audanika.com"
 #endif
 
 #ifndef AUD_VST3_VERSION
-#define AUD_VST3_VERSION "0.1.0"
+#define AUD_VST3_VERSION "0.2.0"
+#endif
+
+#ifndef AUD_VST3_BUNDLE_ID
+#define AUD_VST3_BUNDLE_ID "io.audaudio.vst3.example"
+#endif
+
+#ifndef AUD_VST3_SUBCATEGORIES
+#define AUD_VST3_SUBCATEGORIES "Instrument|Synth"
+#endif
+
+#ifndef AUD_VST3_CID0
+#define AUD_VST3_CID0 0x41554433u  // "AUD3"
+#define AUD_VST3_CID1 0x4558414Du  // "EXAM"
+#define AUD_VST3_CID2 0x504C4500u  // "PLE"
+#define AUD_VST3_CID3 0x00000001u
 #endif
 
 // #############################################################################
@@ -46,26 +63,5 @@
 #else
 #define AUD_VST3_NONBLOCKING
 #endif
-
-namespace aud_vst3 {
-
-// #############################################################################
-// The editor variant of this build.
-constexpr char kVariant = AUD_VST3_VARIANT;
-
-// #############################################################################
-// The engine flavor of this build.
-constexpr int kFlavor = AUD_VST3_FLAVOR;
-
-// #############################################################################
-// Whether this build hides its symbols and names its view class at random;
-// false in the control build (AUD_VST3_NO_HYGIENE).
-#ifdef AUD_VST3_NO_HYGIENE
-constexpr bool kHygiene = false;
-#else
-constexpr bool kHygiene = true;
-#endif
-
-}  // namespace aud_vst3
 
 #endif  // AUD_VST3_CONFIG_HPP

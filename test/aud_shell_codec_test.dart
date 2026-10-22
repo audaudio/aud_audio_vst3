@@ -35,11 +35,7 @@ void main() {
     });
 
     group('decoder()', () {
-      const messages = [
-        AudShellShow(),
-        AudShellMeter(peak: 1, rms: 0.5),
-        AudShellHide(),
-      ];
+      const messages = [AudShellShow(), AudShellPreset(3), AudShellHide()];
       final bytes = [
         for (final message in messages) ...AudShellCodec.encode(message),
       ];

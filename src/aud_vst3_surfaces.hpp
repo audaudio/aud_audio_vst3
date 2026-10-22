@@ -81,8 +81,10 @@ class SurfaceChannel {
   SurfaceChannel& operator=(const SurfaceChannel&) = delete;
 
   // ...........................................................................
-  // Registers the port under a new name; false when bootstrap refuses it.
-  bool start();
+  // Registers the port under a new name that starts with `prefix`, e.g. the
+  // app group of a sandboxed editor, which may look up only names with its
+  // group's prefix (ticket 37); false when bootstrap refuses it.
+  bool start(const std::string& prefix);
 
   // ...........................................................................
   // The name the editor looks up.

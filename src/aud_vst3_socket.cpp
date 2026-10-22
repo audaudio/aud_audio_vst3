@@ -61,6 +61,7 @@ SocketServer::~SocketServer() {
   wake();
   if (thread_.joinable()) thread_.join();
   if (connFd_ >= 0) close(connFd_);
+  if (pendingFd_ >= 0) close(pendingFd_);
   if (listenFd_ >= 0) close(listenFd_);
   if (wake_[0] >= 0) close(wake_[0]);
   if (wake_[1] >= 0) close(wake_[1]);
@@ -91,6 +92,34 @@ bool SocketServer::start(const std::string& directory) {
   setNonBlocking(wake_[1]);
   thread_ = std::thread([this] { loop(); });
   return true;
+}
+
+// .............................................................................
+bool SocketServer::startPaired() {
+  if (pipe(wake_) != 0) return false;
+  setNonBlocking(wake_[0]);
+  setNonBlocking(wake_[1]);
+  thread_ = std::thread([this] { loop(); });
+  return true;
+}
+
+// .............................................................................
+int SocketServer::connectPair() {
+  int fds[2] = {-1, -1};
+  if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return -1;
+  setNonBlocking(fds[0]);
+  const int on = 1;
+  setsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+  // Not inherited by anything but the editor the caller starts with it.
+  fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+  fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pendingFd_ >= 0) close(pendingFd_);
+    pendingFd_ = fds[0];
+  }
+  wake();
+  return fds[1];
 }
 
 // .............................................................................
@@ -160,6 +189,21 @@ void SocketServer::closeConnection() {
     outboxBytes_ = 0;
   }
   onState_(false, ended);
+}
+
+// [IPC thread] The plugin's end of a new pair replaces the connection: the
+// plugin started a new editor.
+void SocketServer::adopt(int fd) {
+  closeConnection();
+  connFd_ = fd;
+  const uint64_t connection = ++lastConnection_;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    connection_ = connection;
+    authenticated_ = 0;
+    disconnectRequested_ = 0;
+  }
+  onState_(true, connection);
 }
 
 // A new connection replaces one that is not authenticated or already gone;
@@ -264,6 +308,17 @@ void SocketServer::loop() {
         disconnectRequested_ = 0;
       }
       if (requested) closeConnection();
+    }
+    {
+      int pending = -1;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::swap(pending, pendingFd_);
+      }
+      if (pending >= 0) {
+        adopt(pending);
+        continue;
+      }
     }
     if (fds[1].revents & POLLIN) {
       accept();

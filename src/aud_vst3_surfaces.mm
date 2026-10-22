@@ -81,10 +81,10 @@ SurfaceChannel::~SurfaceChannel() {
 }
 
 // .............................................................................
-bool SurfaceChannel::start() {
-  char name[128];
-  std::snprintf(name, sizeof(name), "io.audaudio.vst3.%d.%08x%08x", getpid(),
-                arc4random(), arc4random());
+bool SurfaceChannel::start(const std::string& prefix) {
+  char name[192];
+  std::snprintf(name, sizeof(name), "%s.vst3.%d.%08x%08x", prefix.c_str(),
+                getpid(), arc4random(), arc4random());
   name_ = name;
   if (bootstrap_check_in(bootstrap_port, name_.c_str(), &port_) !=
       KERN_SUCCESS) {

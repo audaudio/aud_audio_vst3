@@ -5,12 +5,15 @@
 // found in the LICENSE file in the root of this package.
 
 // The mapping between a graph parameter's plain value and the normalized
-// value of VST3, and the VST3 parameter object over it (ticket 24).
+// value of VST3, the VST3 parameter object over it (ticket 24), and the
+// UTF-16 text of the names the DAW shows (ticket 37).
 
 #ifndef AUD_VST3_PARAM_HPP
 #define AUD_VST3_PARAM_HPP
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
 
 // Through the single-component header: it renames the controller's
 // setState and getState before it includes the controller headers, and
@@ -20,6 +23,16 @@
 #include "aud_vst3_engine.hpp"
 
 namespace aud_vst3 {
+
+// #############################################################################
+// [any thread] Writes the UTF-8 `text` - a name, a unit, a value - into
+// the UTF-16 `string` of `size` code units the DAW reads: cut to fit,
+// without splitting a surrogate pair, and terminated. A text that is no
+// UTF-8 - with an overlong sequence, a surrogate or a value above
+// U+10FFFF - is read as Latin-1, one character per byte. Allocates and
+// locks nothing.
+void writeUtf16(const std::string& text, Steinberg::Vst::TChar* string,
+                size_t size);
 
 // #############################################################################
 // [any thread] Maps between plain and normalized values: linear,
@@ -61,8 +74,10 @@ class AudParameter : public Steinberg::Vst::Parameter {
  public:
   // ...........................................................................
   // Creates the parameter of `param`: its stable id, titles, unit and
-  // steps, with the value of the bundled document as the default.
-  explicit AudParameter(const EngineParam& param);
+  // steps, with the value of the bundled document as the default. `title`
+  // replaces the title "<node id> <name>" when it is not empty.
+  explicit AudParameter(const EngineParam& param,
+                        const std::string& title = std::string());
 
   // ...........................................................................
   // The mapping of the parameter, for the realtime thread.
@@ -79,7 +94,7 @@ class AudParameter : public Steinberg::Vst::Parameter {
 
  private:
   ParamMapping mapping_;
-  char unit_[16] = {};
+  std::string unit_;
 };
 
 }  // namespace aud_vst3
