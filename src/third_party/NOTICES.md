@@ -3,14 +3,15 @@
 `vst3sdk` holds the subset of the VST3 SDK that the plugin and the
 validator compile: the translation units the SDK's CMake modules list for
 the libraries `base`, `pluginterfaces`, `sdk_common`, `sdk` and
-`sdk_hosting` and for the validator (macOS only), the entry points of
-`macmain.cpp`, the single-component base class
+`sdk_hosting` and for the validator, for macOS and Windows, the entry
+points of `macmain.cpp` and `dllmain.cpp`, the single-component base class
 `vstsinglecomponenteffect.cpp`, and the headers they include. The
 manifests are `vst3sdk/SOURCES.txt` (a plugin),
 `vst3sdk/VALIDATOR_SOURCES.txt` (the validator) and
 `vst3sdk/INCLUDES.txt` (the headers). Source:
 https://github.com/steinbergmedia/vst3sdk at tag `v3.8.1_build_84` (`base` fcf9da0, `pluginterfaces` 4f547e8, `public.sdk` 586dc5e),
-vendored on 2026-10-09 for ticket 24 by `scripts/vendor-vst3sdk.js`.
+vendored on 2026-10-24 by `scripts/vendor-vst3sdk.js` (ticket 24, the
+Windows sources in ticket 38).
 
 | Component | Path | Version | License |
 | --- | --- | --- | --- |

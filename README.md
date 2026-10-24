@@ -6,7 +6,8 @@ Part of the Audanika Audio Engine; planned in [aud_audio_pm](https://github.com/
 
 ## What the package holds (ticket 37)
 
-The VST3 shell of the engine (step S18, macOS on Apple silicon): an
+The VST3 shell of the engine (step S18, macOS on Apple silicon and, since
+ticket 38, Windows on x86-64): an
 instrument plugin over the headless host of `aud_audio_graph` that an app
 configures with three files - `plugin.json`, a graph document and its
 presets ([doc/plugin-bundle.md](doc/plugin-bundle.md)) - and builds with
@@ -63,6 +64,19 @@ the node packages it names linked in.
   and editor log visibility changes, late frames and stalls to the unified
   log; `AUD_VST3_LOG=<file>` collects their lines in a test. Without
   `editor` the plugin shows the DAW's generic view.
+- Windows (ticket 38, decisions plugin-008 and plugin-009): the bundle is
+  an x86-64 DLL in `Contents\x86_64-win`, built by the clang++ of Visual
+  Studio against the static C++ runtime; it exports only `GetPluginFactory`,
+  `InitDll` and `ExitDll`, which the build checks. An app builds it into
+  its own folder and links it into a VST3 folder by a junction; the plugin
+  finds content and editor through `containing-folder:<path>` of
+  `plugin.json`. The editor is an executable (`editor`:
+  `containing-folder:<exe>`) the plugin starts with `--plugin-editor
+  --socket <path> --token <hex> --instance <n> --parent <window>` for every
+  open view, in a job object: it makes its Flutter view a child of the
+  plugin's window and talks over a Unix domain socket in `%TEMP%`
+  (`src/aud_vst3_editor_win.cpp`). The logs go to the debugger's output
+  (`OutputDebugString`).
 - The subset of the VST3 SDK 3.8.1 (MIT) in `src/third_party/vst3sdk`; see
   `src/third_party/NOTICES.md`.
 
@@ -77,7 +91,7 @@ the plugin listens on (`AudShellClient.connect`).
 `example/aud_audio_vst3_example.dart` runs both ends in one process.
 On Windows, which hands a process no socket as a file descriptor,
 `AudShellFd.open` and with it `AudShellClient.fromFd` throw an
-`UnsupportedError`.
+`UnsupportedError`; the editor connects with `AudShellClient.connect`.
 
 ```dart
 import 'dart:io';
@@ -155,4 +169,12 @@ live, its preset restored with the project, its editor shown and captured
 (`--plugin <name>`, `--show-editor s`).
 `vendor-vst3sdk.js` vendors the subset of the VST3 SDK into
 `src/third_party/vst3sdk` and writes `src/third_party/NOTICES.md`.
+
+On Windows the scripts take clang++, lld-link and llvm-readobj from the LLVM
+of Visual Studio (component "C++ Clang compiler for Windows");
+`build-plugin.js --install` copies the bundle into
+`%LOCALAPPDATA%\Programs\Common\VST3`, which REAPER and Cubase scan.
+`build-plugin.js`, `validate.js`, `test-native.js`, `reaper-test.js` and
+`vendor-vst3sdk.js` run there; the test host (`host.js`), the
+RealtimeSanitizer and `--editor` are macOS only.
 

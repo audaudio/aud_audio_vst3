@@ -6,11 +6,24 @@
 
 #include "aud_vst3_socket.hpp"
 
+#if _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <afunix.h>
+
+#include <filesystem>
+#else
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <condition_variable>
@@ -33,6 +46,38 @@ using aud_vst3_test::test;
 using Strings = std::vector<std::string>;
 
 namespace {
+
+// The client's sockets: POSIX, or Winsock on Windows (ticket 38).
+#if _WIN32
+using Native = SOCKET;
+using PollEntry = WSAPOLLFD;
+const char kSeparator = '\\';
+int pollOne(PollEntry* entry, int ms) { return WSAPoll(entry, 1, ms); }
+long readSome(Native fd, char* buffer, size_t size) {
+  return recv(fd, buffer, static_cast<int>(size), 0);
+}
+long writeSome(Native fd, const char* data, size_t size) {
+  return send(fd, data, static_cast<int>(size), 0);
+}
+void closeSocket(Native fd) { closesocket(fd); }
+void endSending(Native fd) { shutdown(fd, SD_SEND); }
+void noSigPipe(Native) {}
+#else
+using Native = int;
+using PollEntry = pollfd;
+const char kSeparator = '/';
+int pollOne(PollEntry* entry, int ms) { return poll(entry, 1, ms); }
+long readSome(Native fd, char* buffer, size_t size) { return read(fd, buffer, size); }
+long writeSome(Native fd, const char* data, size_t size) {
+  return write(fd, data, size);
+}
+void closeSocket(Native fd) { close(fd); }
+void endSending(Native fd) { shutdown(fd, SHUT_WR); }
+void noSigPipe(Native fd) {
+  const int on = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+}
+#endif
 
 // How long a test waits for the server.
 constexpr int kTimeoutMs = 2000;
@@ -90,8 +135,7 @@ class Client {
   // Connects to the socket at `path`.
   explicit Client(const std::string& path)
       : fd_(socket(AF_UNIX, SOCK_STREAM, 0)) {
-    const int on = 1;
-    setsockopt(fd_, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+    noSigPipe(fd_);
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     std::snprintf(address.sun_path, sizeof(address.sun_path), "%s",
@@ -100,13 +144,10 @@ class Client {
   }
 
   // Takes `fd`, the editor's end of a socket pair.
-  explicit Client(int fd) : fd_(fd) {
-    const int on = 1;
-    setsockopt(fd_, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
-  }
+  explicit Client(Native fd) : fd_(fd) { noSigPipe(fd_); }
 
   // Ends the connection.
-  ~Client() { close(fd_); }
+  ~Client() { closeSocket(fd_); }
 
   // Not copyable: the object owns the socket.
   Client(const Client&) = delete;
@@ -116,15 +157,14 @@ class Client {
   void write(const std::string& bytes) {
     size_t written = 0;
     while (written < bytes.size()) {
-      const ssize_t n =
-          ::write(fd_, bytes.data() + written, bytes.size() - written);
+      const long n = writeSome(fd_, bytes.data() + written, bytes.size() - written);
       if (n <= 0) return;
       written += static_cast<size_t>(n);
     }
   }
 
   // Ends the sending side: the server reads the end of the connection.
-  void finish() { shutdown(fd_, SHUT_WR); }
+  void finish() { endSending(fd_); }
 
   // The body of the first frame that arrives within `ms`; empty when none
   // arrives.
@@ -139,10 +179,10 @@ class Client {
                               (static_cast<uint32_t>(b[3]) << 24);
         if (bytes.size() >= 4 + length) return bytes.substr(4, length);
       }
-      pollfd readable = {fd_, POLLIN, 0};
-      if (poll(&readable, 1, 10) <= 0) continue;
+      PollEntry readable = {fd_, POLLIN, 0};
+      if (pollOne(&readable, 10) <= 0) continue;
       char buffer[4096];
-      const ssize_t n = read(fd_, buffer, sizeof(buffer));
+      const long n = readSome(fd_, buffer, sizeof(buffer));
       if (n <= 0) return {};
       bytes.append(buffer, static_cast<size_t>(n));
     }
@@ -151,24 +191,33 @@ class Client {
 
   // Whether the server ends the connection within kTimeoutMs.
   bool ended() {
-    pollfd readable = {fd_, POLLIN, 0};
-    if (poll(&readable, 1, kTimeoutMs) <= 0) return false;
+    PollEntry readable = {fd_, POLLIN, 0};
+    if (pollOne(&readable, kTimeoutMs) <= 0) return false;
     char byte = 0;
-    return read(fd_, &byte, 1) <= 0;
+    return readSome(fd_, &byte, 1) <= 0;
   }
 
  private:
-  const int fd_;
+  const Native fd_;
 };
 
 }  // namespace
 
 int main() {
+#if _WIN32
+  WSADATA data;
+  WSAStartup(MAKEWORD(2, 2), &data);
+#endif
   // The directory of the sockets, as the plugin picks it.
   const std::string directory = [] {
+#if _WIN32
+    const char* tmp = std::getenv("TEMP");
+    std::string dir = tmp != nullptr ? tmp : "C:\\Windows\\Temp";
+#else
     const char* tmp = std::getenv("TMPDIR");
     std::string dir = tmp != nullptr ? tmp : "/tmp";
-    while (dir.size() > 1 && dir.back() == '/') dir.pop_back();
+#endif
+    while (dir.size() > 1 && dir.back() == kSeparator) dir.pop_back();
     return dir;
   }();
   // A started server that tells `events`.
@@ -203,12 +252,19 @@ int main() {
       test("creates the socket in the directory", [&] {
         Events events;
         const auto server = serve(events);
-        struct stat info {};
-        expectEqual(server->path().rfind(directory + "/aud-vst3-", 0),
+        expectEqual(server->path().rfind(directory + kSeparator + "aud-vst3-", 0),
                     size_t{0});
+#if _WIN32
+        // A socket file is a reparse point, which status() does not follow.
+        std::error_code error;
+        const auto status = std::filesystem::symlink_status(server->path(), error);
+        expectEqual(!error && std::filesystem::exists(status), true);
+#else
+        struct stat info {};
         expectEqual(stat(server->path().c_str(), &info) == 0 &&
                         S_ISSOCK(info.st_mode),
                     true);
+#endif
       });
     });
 
@@ -288,6 +344,7 @@ int main() {
                     std::string(R"({"type":"param"})"));
       });
     });
+#if !_WIN32
     group("connectPair()", [&] {
       test("hands the editor a connected end, a new pair replaces it", [&] {
         Events events;
@@ -310,6 +367,7 @@ int main() {
         expectEqual(editor.ended(), true);
       });
     });
+#endif
   });
   return aud_vst3_test::finish();
 }

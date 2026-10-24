@@ -6,8 +6,6 @@
 
 #include "aud_vst3_plugin.hpp"
 
-#include <dispatch/dispatch.h>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -24,6 +22,7 @@
 #include "aud_vst3_bundle.hpp"
 #include "aud_vst3_midi.hpp"
 #include "aud_vst3_packages.hpp"
+#include "aud_vst3_ui_thread.hpp"
 
 namespace aud_vst3 {
 
@@ -117,6 +116,9 @@ tresult PLUGIN_API Plugin::initialize(FUnknown* context) {
     engine_.reset();
     return kResultFalse;
   }
+  // The values of an applied preset reach the DAW on its UI thread.
+  retainUiThread();
+  uiThread_ = true;
   // The callback runs on the engine's control thread, also while the engine
   // is destroyed, when engine_ is null already.
   Engine* engine = engine_.get();
@@ -217,6 +219,9 @@ tresult PLUGIN_API Plugin::terminate() {
   editorState_.reset();
   observers_.clear();
   engine_.reset();
+  // No control thread posts any longer.
+  if (uiThread_) releaseUiThread();
+  uiThread_ = false;
   return SingleComponentEffect::terminate();
 }
 
@@ -236,7 +241,7 @@ void Plugin::presetApplied(Engine& engine, uint32_t index) {
   for (const ParamMapping& m : mappings_) {
     values->values.emplace_back(m.id, m.toNormalized(engine.value(m.id)));
   }
-  dispatch_async_f(dispatch_get_main_queue(), values, [](void* context) {
+  const bool posted = runOnUiThread([](void* context) {
     std::unique_ptr<PresetValues> values(static_cast<PresetValues*>(context));
     if (!*values->alive) return;
     Plugin* plugin = values->plugin;
@@ -252,7 +257,8 @@ void Plugin::presetApplied(Engine& engine, uint32_t index) {
     if (IComponentHandler* handler = plugin->getComponentHandler()) {
       handler->restartComponent(kParamValuesChanged);
     }
-  });
+  }, values);
+  if (!posted) delete values;
 }
 
 int32_t Plugin::presetOf(double normalized) const {
@@ -327,7 +333,9 @@ tresult PLUGIN_API Plugin::setState(IBStream* state) {
 tresult PLUGIN_API Plugin::getState(IBStream* state) {
   if (state == nullptr || engine_ == nullptr) return kInvalidArgument;
   ShellState saved;
-  const int32_t index = preset_.load();
+  // The preset as the DAW set it last: a change it made right before it
+  // saves reaches preset_ only with the next block (ticket 38).
+  const int32_t index = presetOf(getParamNormalized(presetParamId()));
   if (index >= 0 && static_cast<size_t>(index) < settings_.presets.size()) {
     saved.preset = settings_.presets[static_cast<size_t>(index)].id;
   }

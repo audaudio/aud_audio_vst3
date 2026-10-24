@@ -290,6 +290,8 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   // Whether the views and the UI thread's blocks may still touch the
   // plugin; terminate clears it on the UI thread.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+  // Whether initialize retained the UI thread (aud_vst3_ui_thread.hpp).
+  bool uiThread_ = false;
 
   // The realtime thread's block: events, transport.
   std::array<AudEvent, kMaxEvents> events_{};
@@ -304,7 +306,8 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
 };
 
 // #############################################################################
-// Creates the editor's view of `plugin` (aud_vst3_editor.mm).
+// Creates the editor's view of `plugin` (aud_vst3_editor.mm on macOS,
+// aud_vst3_editor_win.cpp on Windows); null when there is none.
 Steinberg::IPlugView* createEditorView(Plugin* plugin);
 
 }  // namespace aud_vst3

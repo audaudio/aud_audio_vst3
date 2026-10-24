@@ -16,6 +16,8 @@ pluginterfaces/base/ustring.cpp
 public.sdk/source/common/commoniids.cpp
 public.sdk/source/common/commonstringconvert.cpp
 public.sdk/source/common/openurl.cpp
+public.sdk/source/common/systemclipboard_win32.cpp
+public.sdk/source/common/threadchecker_win32.cpp
 public.sdk/source/common/readfile.cpp
 public.sdk/source/vst/vstpresetfile.cpp
 public.sdk/source/common/threadchecker_mac.mm
@@ -39,3 +41,4 @@ public.sdk/source/vst/vstparameters.cpp
 public.sdk/source/vst/vstrepresentation.cpp
 public.sdk/source/vst/vstsinglecomponenteffect.cpp
 public.sdk/source/main/macmain.cpp
+public.sdk/source/main/dllmain.cpp

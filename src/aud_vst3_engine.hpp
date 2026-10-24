@@ -25,8 +25,6 @@
 #ifndef AUD_VST3_ENGINE_HPP
 #define AUD_VST3_ENGINE_HPP
 
-#include <dispatch/dispatch.h>
-
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -42,6 +40,7 @@
 
 #include "aud_vst3_config.hpp"
 #include "aud_vst3_settings.hpp"
+#include "aud_vst3_sync.hpp"
 
 namespace aud_vst3 {
 
@@ -219,14 +218,14 @@ class Engine {
 
   // Realtime to control.
   AudSpscQueue<ParamChange> changes_;
-  dispatch_semaphore_t wake_;
+  Semaphore wake_;
   std::atomic<uint64_t> droppedParams_{0};
   // The changes pushed, and those the control thread took from the ring
   // and passed on or parked; the control thread signals drained_ after
   // each pass, for waitForParams() and waitForPreset().
   std::atomic<uint64_t> pushed_{0};
   std::atomic<uint64_t> taken_{0};
-  dispatch_semaphore_t drained_;
+  Semaphore drained_;
   // Changes the graph's queue refused, newest value per id (control thread
   // only).
   std::vector<ParamChange> parked_;

@@ -10,16 +10,19 @@
 // The SDK's own CMake modules name the translation units of each library:
 // `base`, `pluginterfaces`, `sdk_common`, `sdk` and `sdk_hosting` in
 // cmake/modules/SMTG_VST3_SDK.cmake, the validator in its CMakeLists.txt.
-// The script reads those lists, keeps the macOS sources, collects their
-// header closure with `clang -MM`, copies sources, headers and license files
-// into the destination and writes the manifests the build script reads:
+// The script reads those lists, keeps the macOS and the Windows sources
+// (ticket 38), collects their header closure with `clang -MM` for the
+// target each one builds for, copies sources, headers and license files into
+// the destination and writes the manifests the build script reads; the build
+// takes the sources of its platform (build-plugin.js, `forPlatform`):
 //
 // - SOURCES.txt: the translation units of a plugin,
 // - VALIDATOR_SOURCES.txt: those of the validator,
 // - INCLUDES.txt: every header the two include.
 //
 // Without --sdk the script clones the SDK at the pinned tag into
-// .dart_tool/vst3sdk-<tag>, with the submodules it needs.
+// .dart_tool/vst3sdk-<tag>, with the submodules it needs and without line
+// end conversion, so that the vendored files keep the SDK's LF on Windows.
 //
 // Usage:
 //   node scripts/vendor-vst3sdk.js [--sdk <checkout>] [--tag <tag>]
@@ -36,12 +39,14 @@ const root = path.resolve(__dirname, '..');
 const defaultTag = 'v3.8.1_build_84';
 const submodules = ['base', 'pluginterfaces', 'public.sdk', 'cmake'];
 
-// The SDK file that holds the plugin's macOS entry points.
+// The SDK files that hold the plugin's entry points on macOS and Windows.
 const macMain = 'public.sdk/source/main/macmain.cpp';
+const winMain = 'public.sdk/source/main/dllmain.cpp';
 // The base class of a plugin whose processor and controller are one object.
 const singleComponent = 'public.sdk/source/vst/vstsinglecomponenteffect.cpp';
-// The SDK file that loads a bundle in the validator on macOS.
+// The SDK files that load a bundle in the validator on macOS and Windows.
 const moduleMac = 'public.sdk/source/vst/hosting/module_mac.mm';
+const moduleWin = 'public.sdk/source/vst/hosting/module_win32.cpp';
 
 function option(args, name, fallback) {
   const index = args.indexOf(name);
@@ -63,6 +68,8 @@ function checkout(tag) {
   if (fs.existsSync(path.join(dir, 'public.sdk', 'source'))) return dir;
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   run('git', [
+    '-c',
+    'core.autocrlf=false',
     'clone',
     '--quiet',
     '--depth',
@@ -72,7 +79,11 @@ function checkout(tag) {
     'https://github.com/steinbergmedia/vst3sdk.git',
     dir,
   ]);
-  run('git', ['submodule', 'update', '--init', '--depth', '1', ...submodules], dir);
+  run(
+    'git',
+    ['-c', 'core.autocrlf=false', 'submodule', 'update', '--init', '--depth', '1', ...submodules],
+    dir,
+  );
   return dir;
 }
 
@@ -92,8 +103,19 @@ function functionBody(text, name) {
   return text.slice(start, end);
 }
 
-function isMacSource(file) {
-  return !/_(win32|linux)\.(cpp|mm)$/.test(file);
+// The sources of macOS and Windows, not those of Linux.
+function isPlatformSource(file) {
+  return !/_linux\.(cpp|mm)$/.test(file);
+}
+
+// The target of a source for `clang -MM`: a Windows or a macOS one, or
+// both for a source of every platform.
+function targetsOf(file) {
+  const windows = ['--target=x86_64-pc-windows-msvc'];
+  const mac = ['--target=arm64-apple-macos12'];
+  if (/_win32\.cpp$/.test(file) || file === winMain) return [windows];
+  if (file.endsWith('.mm') || file === macMain) return [mac];
+  return [mac, windows];
 }
 
 function unique(list) {
@@ -134,7 +156,8 @@ function translationUnits(sdk) {
       ...sdkLib,
       singleComponent,
       macMain,
-    ].filter(isMacSource),
+      winMain,
+    ].filter(isPlatformSource),
   );
   const validator = unique(
     [
@@ -145,43 +168,51 @@ function translationUnits(sdk) {
       ...sourcesOf(validatorList),
       ...validatorOwn,
       moduleMac,
-    ].filter(isMacSource),
+      moduleWin,
+    ].filter(isPlatformSource),
   );
   return { plugin, validator };
 }
 
-// The headers inside the SDK that `files` include, relative to the SDK.
+// The headers inside the SDK that `files` include, relative to the SDK with
+// '/'. Each file is scanned for the targets it builds for; -MG lets a scan
+// go on past the system headers of the other platform, which are missing.
 function headerClosure(sdk, files) {
   const headers = new Set();
   for (const file of files) {
     const objc = file.endsWith('.mm');
-    const output = run(
-      'clang++',
-      [
-        '-MM',
-        '-x',
-        objc ? 'objective-c++' : 'c++',
-        ...(objc ? ['-fobjc-arc'] : []),
-        '-std=c++17',
-        '-DRELEASE=1',
-        '-DSMTG_USE_STDATOMIC_H=1',
-        '-I',
+    for (const target of targetsOf(file)) {
+      const output = run(
+        'clang++',
+        [
+          ...target,
+          '-MM',
+          '-MG',
+          '-x',
+          objc ? 'objective-c++' : 'c++',
+          ...(objc ? ['-fobjc-arc'] : []),
+          '-std=c++17',
+          '-DRELEASE=1',
+          '-DSMTG_USE_STDATOMIC_H=1',
+          '-I',
+          sdk,
+          path.join(sdk, file),
+        ],
         sdk,
-        path.join(sdk, file),
-      ],
-      sdk,
-    );
-    const dependencies = output
-      .replace(/\\\n/g, ' ')
-      .split(/\s+/)
-      .slice(1)
-      .filter(Boolean);
-    for (const dependency of dependencies) {
-      const absolute = path.resolve(sdk, dependency);
-      const relative = path.relative(sdk, absolute);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-      if (/\.(cpp|mm)$/.test(relative)) continue;
-      headers.add(relative);
+      );
+      const dependencies = output
+        .replace(/\\\r?\n/g, ' ')
+        .split(/\s+/)
+        .slice(1)
+        .filter(Boolean);
+      for (const dependency of dependencies) {
+        const absolute = path.resolve(sdk, dependency);
+        const relative = path.relative(sdk, absolute);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+        if (/\.(cpp|mm)$/.test(relative)) continue;
+        if (!fs.existsSync(absolute)) continue;
+        headers.add(relative.split(path.sep).join('/'));
+      }
     }
   }
   return [...headers].sort();
@@ -223,14 +254,15 @@ function notices(sdk, tag) {
 \`vst3sdk\` holds the subset of the VST3 SDK that the plugin and the
 validator compile: the translation units the SDK's CMake modules list for
 the libraries \`base\`, \`pluginterfaces\`, \`sdk_common\`, \`sdk\` and
-\`sdk_hosting\` and for the validator (macOS only), the entry points of
-\`macmain.cpp\`, the single-component base class
+\`sdk_hosting\` and for the validator, for macOS and Windows, the entry
+points of \`macmain.cpp\` and \`dllmain.cpp\`, the single-component base class
 \`vstsinglecomponenteffect.cpp\`, and the headers they include. The
 manifests are \`vst3sdk/SOURCES.txt\` (a plugin),
 \`vst3sdk/VALIDATOR_SOURCES.txt\` (the validator) and
 \`vst3sdk/INCLUDES.txt\` (the headers). Source:
 https://github.com/steinbergmedia/vst3sdk at tag \`${tag}\` (${commits}),
-vendored on ${today} for ticket 24 by \`scripts/vendor-vst3sdk.js\`.
+vendored on ${today} by \`scripts/vendor-vst3sdk.js\` (ticket 24, the
+Windows sources in ticket 38).
 
 | Component | Path | Version | License |
 | --- | --- | --- | --- |
@@ -249,6 +281,8 @@ VST is a registered trademark of Steinberg Media Technologies GmbH.
 }
 
 function main() {
+  // clang++ on Windows: the LLVM of Visual Studio.
+  if (process.platform === 'win32') require('./build-plugin.js').useVisualStudioLlvm();
   const args = process.argv.slice(2);
   const tag = option(args, '--tag', defaultTag);
   const dest = destinationOf(

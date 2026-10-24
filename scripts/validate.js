@@ -6,8 +6,9 @@
 
 // Builds the VST3 SDK's validator from the vendored subset
 // (src/third_party/vst3sdk/VALIDATOR_SOURCES.txt) and runs it on bundles
-// (ticket 24). Objects and the binary are cached under
-// .dart_tool/vst3-build/validator.
+// (ticket 24): for Apple silicon on macOS, for x86-64 with the clang++ of
+// Visual Studio on Windows (ticket 38). Objects and the binary are cached
+// under .dart_tool/vst3-build/validator.
 //
 //   node scripts/validate.js                     every bundle in build/vst3
 //                                                but the RealtimeSanitizer ones
@@ -21,6 +22,8 @@ const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+const { windows, targetFlags, sdkFlags, forPlatform } = require('./build-plugin.js');
 
 const root = path.resolve(__dirname, '..');
 const sdkDir = path.join(root, 'src', 'third_party', 'vst3sdk');
@@ -76,28 +79,31 @@ async function compile(files, flags) {
 }
 
 async function buildValidator() {
-  const files = readList(path.join(sdkDir, 'VALIDATOR_SOURCES.txt')).map((file) =>
-    path.join(sdkDir, file),
-  );
+  const files = readList(path.join(sdkDir, 'VALIDATOR_SOURCES.txt'))
+    .filter(forPlatform)
+    .map((file) => path.join(sdkDir, file));
   const flags = [
-    '-arch',
-    'arm64',
-    '-mmacosx-version-min=12.0',
+    ...targetFlags,
     '-O1',
     '-DRELEASE=1',
     '-DSMTG_USE_STDATOMIC_H=1',
+    ...sdkFlags,
+    ...(windows ? ['-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS'] : []),
     '-I',
     sdkDir,
   ];
   const objects = await compile(files, flags);
-  const binary = path.join(buildDir, `validator-${hashOf(objects)}`);
+  const binary = path.join(buildDir, `validator-${hashOf(objects)}${windows ? '.exe' : ''}`);
   if (!fs.existsSync(binary)) {
-    const result = spawnSync(
-      'clang++',
-      ['-arch', 'arm64', '-o', binary, ...objects, '-framework', 'Cocoa'],
-      { encoding: 'utf8' },
-    );
-    if (result.status !== 0) throw new Error(`Linking failed:\n${result.stderr}`);
+    const link = windows
+      ? ['-fuse-ld=lld', '-lole32', '-lshell32', '-luser32']
+      : ['-framework', 'Cocoa'];
+    const result = spawnSync('clang++', [...targetFlags, '-o', binary, ...objects, ...link], {
+      encoding: 'utf8',
+    });
+    if (result.status !== 0) {
+      throw new Error(`Linking failed:\n${result.stdout}${result.stderr}`);
+    }
   }
   return binary;
 }
@@ -126,14 +132,14 @@ async function main() {
     );
     const output = `${result.stdout}${result.stderr}`;
     const summary = output
-      .split('\n')
+      .split(/\r?\n/)
       .filter((line) => /Result:|tests passed|tests failed/.test(line))
       .join('\n');
     console.log(`${path.basename(bundle)}: ${result.status === 0 ? 'passed' : 'FAILED'}`);
     if (summary) console.log(summary);
     if (result.status !== 0) {
       failed += 1;
-      console.log(output.split('\n').filter((line) => /ERROR|Failed|failed/.test(line)).join('\n'));
+      console.log(output.split(/\r?\n/).filter((line) => /ERROR|Failed|failed/.test(line)).join('\n'));
     }
   }
   process.exit(failed === 0 ? 0 : 1);

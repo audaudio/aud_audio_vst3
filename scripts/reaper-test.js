@@ -13,10 +13,11 @@
 // and the reopened project holds the preset it was saved with.
 //
 // REAPER runs with a resource folder of its own under .dart_tool/reaper: a
-// copy of the user's reaper.ini set to CoreAudio at 48 kHz and 128 frames,
-// so that the user's own settings stay as they are. It finds the plugin in
-// the user's plug-in folders, e.g. through the link of an app. REAPER comes
-// to the front while it runs.
+// copy of the user's reaper.ini - on macOS set to CoreAudio at 48 kHz and
+// 128 frames, on Windows (ticket 38) with the user's audio device as it is
+// -, so that the user's own settings stay as they are. It finds the plugin
+// in the user's plug-in folders, e.g. through the link of an app. REAPER
+// comes to the front while it runs.
 //
 // With --show-editor the plugin's editor shows in a floating window for
 // that many seconds while the item plays, and its window is captured as a
@@ -33,8 +34,13 @@ const os = require('node:os');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const reaperApp = '/Applications/REAPER.app';
-const userResources = path.join(os.homedir(), 'Library', 'Application Support', 'REAPER');
+const windows = process.platform === 'win32';
+const reaperApp = windows
+  ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'REAPER (x64)', 'reaper.exe')
+  : '/Applications/REAPER.app';
+const userResources = windows
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'REAPER')
+  : path.join(os.homedir(), 'Library', 'Application Support', 'REAPER');
 const work = path.join(root, '.dart_tool', 'reaper');
 
 // A rendered preset sounds above this and never exceeds full scale.
@@ -61,11 +67,11 @@ function prepareResources() {
   let ini = fs.existsSync(path.join(userResources, 'reaper.ini'))
     ? fs.readFileSync(path.join(userResources, 'reaper.ini'), 'utf8')
     : '[reaper]\n';
+  ini = ini.replace(/\r\n/g, '\n');
   const settings = {
-    coreaudiobs: '128',
-    coreaudiobsuse: '1',
-    coreaudiosrate: '48000',
-    coreaudiosrateuse: '1',
+    ...(windows
+      ? {}
+      : { coreaudiobs: '128', coreaudiobsuse: '1', coreaudiosrate: '48000', coreaudiosrateuse: '1' }),
     splashfast: '1',
     runallonstop: '1',
   };
@@ -126,6 +132,43 @@ for w in list where (w[kCGWindowOwnerName as String] as? String) == "REAPER" {
   return result.stdout.split('\n').filter(Boolean);
 }
 
+// Captures the visible windows whose title names `plugin` on Windows: their
+// rectangles on the screen as they show, with the editor's child window in
+// them, through PowerShell (ticket 38).
+function captureWindowsOf(plugin, runDir) {
+  const script = `
+Add-Type -AssemblyName System.Drawing
+Add-Type @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class AudWindows {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  public struct RECT { public int Left, Top, Right, Bottom; }
+}
+'@
+[AudWindows]::SetProcessDPIAware() | Out-Null
+$script:i = 0
+[AudWindows]::EnumWindows({ param($h, $l)
+  $title = New-Object Text.StringBuilder 512
+  [AudWindows]::GetWindowText($h, $title, 512) | Out-Null
+  if ([AudWindows]::IsWindowVisible($h) -and $title.ToString().Contains(${JSON.stringify(plugin)})) {
+    $r = New-Object AudWindows+RECT
+    [AudWindows]::GetWindowRect($h, [ref]$r) | Out-Null
+    $bitmap = New-Object Drawing.Bitmap ($r.Right - $r.Left), ($r.Bottom - $r.Top)
+    [Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($r.Left, $r.Top, 0, 0, $bitmap.Size)
+    $bitmap.Save((Join-Path ${JSON.stringify(runDir)} "editor-$($script:i).png"))
+    $script:i++
+  }
+  $true }, [IntPtr]::Zero) | Out-Null`;
+  spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+  });
+}
+
 // Captures the editor's window once the log says it shows and the editor
 // had time to start.
 function captureEditor(log, runDir, plugin) {
@@ -133,6 +176,10 @@ function captureEditor(log, runDir, plugin) {
     if (!fs.existsSync(log) || !fs.readFileSync(log, 'utf8').includes('"editorShown"')) return;
     clearInterval(timer);
     setTimeout(() => {
+      if (windows) {
+        captureWindowsOf(plugin, runDir);
+        return;
+      }
       editorWindows(plugin).forEach((id, i) => {
         spawnSync('screencapture', ['-x', '-o', '-l', id, path.join(runDir, `editor-${i}.png`)]);
       });
@@ -157,14 +204,18 @@ async function main() {
       `showEditor = ${options.showEditor}, ` +
       `project = ${JSON.stringify(project)}, log = ${JSON.stringify(log)} }\n`,
   );
-  const reaper = spawn(
-    'open',
-    ['-n', '-W', '-a', reaperApp, '--env', `AUD_REAPER_CONFIG=${configFile}`,
-      '--env', `AUD_VST3_LOG=${path.join(runDir, 'plugin.log')}`, '--args',
-      '-cfgfile', ini, '-nosplash', '-newinst', '-new', '-saveas', project,
-      path.join(root, 'scripts', 'reaper', 'test.lua')],
-    { stdio: 'ignore' },
-  );
+  const reaperArgs = ['-cfgfile', ini, '-nosplash', '-newinst', '-new', '-saveas', project,
+    path.join(root, 'scripts', 'reaper', 'test.lua')];
+  const env = { AUD_REAPER_CONFIG: configFile, AUD_VST3_LOG: path.join(runDir, 'plugin.log') };
+  const reaper = windows
+    ? spawn(reaperApp, reaperArgs, { stdio: 'ignore', env: { ...process.env, ...env } })
+    : spawn(
+        'open',
+        ['-n', '-W', '-a', reaperApp,
+          ...Object.entries(env).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
+          '--args', ...reaperArgs],
+        { stdio: 'ignore' },
+      );
   const exited = new Promise((resolve) => reaper.on('exit', resolve));
   if (options.showEditor > 0) captureEditor(log, runDir, options.plugin);
   const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 300_000));
