@@ -21,6 +21,15 @@ these three files.
 |-Helpers/<Editor>.app          the editor, when the configuration names one
 ```
 
+On Windows (ticket 38, plugin-008) the binary is a DLL with the name of the
+bundle, without `Info.plist`, `PkgInfo` and `Helpers`:
+
+```text
+<Name>.vst3\Contents\
+|-x86_64-win\<Name>.vst3        the shell with the node packages linked in
+|-Resources\                    moduleinfo.json, aud_plugin\, notices\
+```
+
 ## plugin.json
 
 ```jsonc
@@ -48,7 +57,10 @@ these three files.
   // is the host's base directory.
   //   containing-app:<path>  inside the .app that holds the plugin's
   //                          resolved bundle, e.g. through a link
-  //   app:<bundle id>:<path> inside the installed app with that id
+  //   containing-folder:<path> inside the folder that holds the
+  //                          resolved bundle, e.g. the folder of a Windows
+  //                          app the plugin is built into
+  //   app:<bundle id>:<path> inside the installed app with that id (macOS)
   //   bundle:<path>          inside the plugin's own bundle
   "content": [
     "containing-app:Contents/Resources/content/sfz",
@@ -70,6 +82,8 @@ these three files.
       "default": 0 }
   ],
   // The editor app in Contents/Helpers; null for the host's generic view.
+  // On Windows the editor's executable as a location like those of
+  // `content`, e.g. "containing-folder:audanika.exe".
   "editor": "Audanika Editor.app",
   // The app group the sandboxed editor is signed with: the plugin names
   // the Mach port of the editor's frames with it as prefix, the only names
@@ -135,9 +149,11 @@ different nodes per MIDI channel connects the graph to an
   sends its control change only when it moves: until then the values the
   preset sets hold, e.g. the start values of a combi's scripts; `default`
   is where the DAW shows it.
-- **State.** JSON with the preset id, the parameter values and the values
-  of the controls that moved, so that a project never holds a path of the
-  machine it was saved on.
+- **State.** JSON with the preset id, the parameter values, the values of
+  the controls that moved and the settings the editor sent last
+  (`AudShellSettings`, ticket 38), so that a project never holds a path of
+  the machine it was saved on; every welcome hands the settings to the
+  editor.
 - **Editor.** One editor process per DAW process and plugin build, one
   Flutter view per instance, started with a socket pair as file descriptor
   3 and showing its frames through IOSurfaces under a Mach name with the
@@ -147,4 +163,8 @@ different nodes per MIDI channel connects the graph to an
   MIDI and sends it to the DAW on the event output "MIDI Out", and ends
   the notes the editor holds when the editor ends or crashes. A crashed
   editor of an open view comes back; an editor without a view quits after
-  10 s.
+  10 s. On Windows (plugin-009) an editor process serves one open view: the
+  plugin starts it with `--plugin-editor --socket <path> --token <hex>
+  --instance <n> --parent <window>` in a job object, and it makes its
+  Flutter view a child of the plugin's window and talks over a Unix domain
+  socket in `%TEMP%`.

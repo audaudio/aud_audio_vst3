@@ -139,5 +139,6 @@ void main() {
       await client.close();
       closeFd(plugin);
     });
-  });
+    // A POSIX socket pair carries these tests (ticket 38).
+  }, testOn: '!windows');
 }

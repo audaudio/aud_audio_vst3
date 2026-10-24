@@ -20,6 +20,9 @@ import 'package:ffi/ffi.dart';
 /// an isolate of its own reads it through `read(2)` and [add] writes
 /// through `write(2)`.
 class AudShellFd {
+  // The POSIX parts run on macOS and Linux only; Windows refuses in
+  // open() (ticket 38).
+  // coverage:ignore-start
   AudShellFd._(this.fd, this._port) {
     _port.listen((message) {
       if (message is TransferableTypedData) {
@@ -33,8 +36,16 @@ class AudShellFd {
   }
 
   // ...........................................................................
-  /// Starts reading [fd].
+  /// Starts reading [fd]; throws an [UnsupportedError] on Windows, which
+  /// hands a process no socket as a file descriptor (ticket 38).
   static Future<AudShellFd> open(int fd) async {
+    // coverage:ignore-end
+    if (Platform.isWindows) {
+      throw UnsupportedError(
+        'AudShellFd reads an inherited POSIX socket; Windows has none',
+      );
+    }
+    // coverage:ignore-start
     final port = ReceivePort();
     await Isolate.spawn(_read, (fd, port.sendPort));
     return AudShellFd._(fd, port);
@@ -144,3 +155,4 @@ final _errnoLocation = _libc
     );
 
 int _errno() => _errnoLocation().value;
+// coverage:ignore-end

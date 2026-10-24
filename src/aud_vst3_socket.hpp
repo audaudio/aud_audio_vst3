@@ -11,7 +11,8 @@
 // of a socket pair whose other end the editor inherits when the plugin
 // starts it (connectPair, ticket 37) - a sandboxed editor reaches no socket
 // file of the DAW -, or a connection accepted on a socket file (start, the
-// spike of ticket 24).
+// spike of ticket 24, and Windows, ticket 38: Winsock has AF_UNIX but no
+// socket pair a process could inherit).
 //
 // One IPC thread per server accepts, reads and writes. Every connection
 // has an id; received messages and the end of a connection go to the
@@ -73,6 +74,7 @@ class SocketServer {
   // thread; false when the socket cannot be created.
   bool start(const std::string& directory);
 
+#if !_WIN32
   // ...........................................................................
   // Starts the IPC thread without a socket file, for connectPair(); false
   // when the thread's wake pipe cannot be made.
@@ -83,6 +85,7 @@ class SocketServer {
   // the current one ends - and returns the other end for the editor, which
   // the caller closes once the editor inherited it; -1 on a failure.
   int connectPair();
+#endif
 
   // ...........................................................................
   // [any thread] Queues a message for the current connection once it is
@@ -116,20 +119,32 @@ class SocketServer {
   }
 
  private:
+  // A socket: a file descriptor, or a SOCKET of Winsock.
+#if _WIN32
+  using Handle = uintptr_t;
+#else
+  using Handle = int;
+#endif
+  static constexpr Handle kNone = static_cast<Handle>(-1);
+
+  bool startThread();
   void loop();
   void wake();
   void accept();
-  void adopt(int fd);
-  bool readFrom(int fd);
+  void adopt(Handle fd);
+  bool readFrom(Handle fd);
   bool parseFrames();
   void closeConnection();
 
   MessageHandler onMessage_;
   StateHandler onState_;
   std::string path_;
-  int listenFd_ = -1;
-  int connFd_ = -1;  // IPC thread only
-  int wake_[2] = {-1, -1};
+  Handle listenFd_ = kNone;
+  Handle connFd_ = kNone;  // IPC thread only
+  // The wake channel: written by any thread, read by the IPC thread; a pipe,
+  // or on Windows a connection of the listening socket to itself.
+  Handle wake_[2] = {kNone, kNone};
+  bool winsock_ = false;
   std::string inbox_;    // IPC thread only
   std::string writing_;  // IPC thread only: the frame being written
   size_t written_ = 0;   // IPC thread only
@@ -141,7 +156,7 @@ class SocketServer {
   uint64_t authenticated_ = 0;   // the authenticated connection, 0 for none
   uint64_t disconnectRequested_ = 0;
   uint64_t lastConnection_ = 0;  // IPC thread only
-  int pendingFd_ = -1;           // the end connectPair() hands the thread
+  Handle pendingFd_ = kNone;     // the end connectPair() hands the thread
 
   std::atomic<bool> stopping_{false};
   std::atomic<uint64_t> dropped_{0};

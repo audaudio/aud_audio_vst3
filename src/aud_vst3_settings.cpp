@@ -279,6 +279,7 @@ std::string encodeState(const ShellState& state) {
     controls.set(id, Json::ofNumber(value));
   }
   root.set("controls", std::move(controls));
+  if (!state.editor.empty()) root.set("editor", Json::ofString(state.editor));
   std::string text;
   aud::writeJson(root, 0, &text);
   return text;
@@ -312,6 +313,10 @@ bool decodeState(const std::string& text, ShellState* out, std::string* error) {
       }
       out->controls.emplace_back(key, value.number);
     }
+  }
+  if (!stringOf(root, "editor", "state", false, &out->editor, error)) return false;
+  if (out->editor.size() > kMaxEditorSettings) {
+    return fail(error, "state editor is too long");
   }
   return true;
 }

@@ -6,6 +6,19 @@
 
 #include "aud_vst3_socket.hpp"
 
+#if _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <afunix.h>
+#include <windows.h>
+
+#include <random>
+#else
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -14,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#endif
 
 #include <cstdio>
 #include <cstring>
@@ -29,11 +43,6 @@ constexpr size_t kOutboxLimit = 4u << 20;
 // Above this, the editor is taken as hung and its connection is closed.
 constexpr size_t kOutboxHardLimit = 32u << 20;
 
-void setNonBlocking(int fd) {
-  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-  fcntl(fd, F_SETFD, FD_CLOEXEC);
-}
-
 std::string frameOf(const aud::Json& message) {
   std::string body;
   aud::writeJson(message, 0, &body);
@@ -45,6 +54,123 @@ std::string frameOf(const aud::Json& message) {
   frame[3] = static_cast<char>((length >> 24) & 0xff);
   return frame + body;
 }
+
+// .............................................................................
+// The calls of the platform's sockets: POSIX, or Winsock on Windows.
+
+#if _WIN32
+using Native = SOCKET;
+using PollEntry = WSAPOLLFD;
+
+void closeSocket(Native fd) { closesocket(fd); }
+
+void setNonBlocking(Native fd) {
+  u_long on = 1;
+  ioctlsocket(fd, FIONBIO, &on);
+}
+
+// The bytes read, 0 at the end of the connection, -1 on an error and -2
+// when nothing is there yet.
+long readSome(Native fd, char* buffer, size_t size) {
+  const int n = recv(fd, buffer, static_cast<int>(size), 0);
+  if (n >= 0) return n;
+  return WSAGetLastError() == WSAEWOULDBLOCK ? -2 : -1;
+}
+
+// The bytes written, -1 on an error and -2 when the socket takes none now.
+long writeSome(Native fd, const char* data, size_t size) {
+  const int n = send(fd, data, static_cast<int>(size), 0);
+  if (n >= 0) return n;
+  return WSAGetLastError() == WSAEWOULDBLOCK ? -2 : -1;
+}
+
+// Whether the connection `fd` is still open: data waits or nothing yet.
+bool stillOpen(Native fd) {
+  char byte = 0;
+  const int n = recv(fd, &byte, 1, MSG_PEEK);
+  return n > 0 || (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK);
+}
+
+int pollAll(PollEntry* entries, unsigned long count, int timeoutMs) {
+  return WSAPoll(entries, count, timeoutMs);
+}
+
+bool interrupted() { return false; }
+
+std::wstring wide(const std::string& text) {
+  if (text.empty()) return {};
+  const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                                         static_cast<int>(text.size()), nullptr, 0);
+  std::wstring result(static_cast<size_t>(length), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                      &result[0], length);
+  return result;
+}
+
+void removeFile(const std::string& path) { DeleteFileW(wide(path).c_str()); }
+
+std::string socketName() {
+  std::random_device random;
+  char name[64];
+  std::snprintf(name, sizeof(name), "\\aud-vst3-%lu-%08x.sock",
+                static_cast<unsigned long>(GetCurrentProcessId()), random());
+  return name;
+}
+#else
+using Native = int;
+using PollEntry = pollfd;
+
+void closeSocket(Native fd) { close(fd); }
+
+void setNonBlocking(Native fd) {
+  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+  fcntl(fd, F_SETFD, FD_CLOEXEC);
+}
+
+long readSome(Native fd, char* buffer, size_t size) {
+  for (;;) {
+    const ssize_t n = read(fd, buffer, size);
+    if (n >= 0) return static_cast<long>(n);
+    if (errno == EINTR) continue;
+    return errno == EAGAIN || errno == EWOULDBLOCK ? -2 : -1;
+  }
+}
+
+long writeSome(Native fd, const char* data, size_t size) {
+  for (;;) {
+    const ssize_t n = write(fd, data, size);
+    if (n >= 0) return static_cast<long>(n);
+    if (errno == EINTR) continue;
+    return errno == EAGAIN || errno == EWOULDBLOCK ? -2 : -1;
+  }
+}
+
+bool stillOpen(Native fd) {
+  char byte = 0;
+  const ssize_t n = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+  return n > 0 || (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+}
+
+int pollAll(PollEntry* entries, unsigned long count, int timeoutMs) {
+  return poll(entries, static_cast<nfds_t>(count), timeoutMs);
+}
+
+bool interrupted() { return errno == EINTR; }
+
+void removeFile(const std::string& path) { unlink(path.c_str()); }
+
+std::string socketName() {
+  char name[64];
+  std::snprintf(name, sizeof(name), "/aud-vst3-%d-%08x.sock", getpid(),
+                arc4random());
+  return name;
+}
+
+void noSigPipe(Native fd) {
+  const int on = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+}
+#endif
 
 }  // namespace
 
@@ -60,67 +186,81 @@ SocketServer::~SocketServer() {
   stopping_ = true;
   wake();
   if (thread_.joinable()) thread_.join();
-  if (connFd_ >= 0) close(connFd_);
-  if (pendingFd_ >= 0) close(pendingFd_);
-  if (listenFd_ >= 0) close(listenFd_);
-  if (wake_[0] >= 0) close(wake_[0]);
-  if (wake_[1] >= 0) close(wake_[1]);
-  if (!path_.empty()) unlink(path_.c_str());
+  for (const Handle fd : {connFd_, pendingFd_, listenFd_, wake_[0], wake_[1]}) {
+    if (fd != kNone) closeSocket(static_cast<Native>(fd));
+  }
+  if (!path_.empty()) removeFile(path_);
+#if _WIN32
+  if (winsock_) WSACleanup();
+#endif
 }
 
 // .............................................................................
 bool SocketServer::start(const std::string& directory) {
-  char name[64];
-  std::snprintf(name, sizeof(name), "/aud-vst3-%d-%08x.sock", getpid(),
-                arc4random());
-  path_ = directory + name;
+#if _WIN32
+  WSADATA data;
+  if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return false;
+  winsock_ = true;
+#endif
+  path_ = directory + socketName();
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
   if (path_.size() >= sizeof(address.sun_path)) return false;
   std::memcpy(address.sun_path, path_.c_str(), path_.size() + 1);
-  listenFd_ = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (listenFd_ < 0) return false;
-  setNonBlocking(listenFd_);
-  unlink(path_.c_str());
-  if (bind(listenFd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) !=
-          0 ||
-      chmod(path_.c_str(), 0600) != 0 || listen(listenFd_, 2) != 0) {
+  const Native listener = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (listener == static_cast<Native>(kNone)) return false;
+  listenFd_ = static_cast<Handle>(listener);
+  removeFile(path_);
+  if (bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
     return false;
   }
-  if (pipe(wake_) != 0) return false;
-  setNonBlocking(wake_[0]);
-  setNonBlocking(wake_[1]);
-  thread_ = std::thread([this] { loop(); });
-  return true;
+#if !_WIN32
+  if (chmod(path_.c_str(), 0600) != 0) return false;
+#endif
+  if (listen(listener, 2) != 0) return false;
+#if _WIN32
+  // Winsock has no pipe: the wake channel is a connection of the listening
+  // socket to itself, made before the IPC thread accepts anything.
+  const Native writer = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (writer == INVALID_SOCKET) return false;
+  wake_[1] = static_cast<Handle>(writer);
+  if (connect(writer, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    return false;
+  }
+  const Native reader = ::accept(listener, nullptr, nullptr);
+  if (reader == INVALID_SOCKET) return false;
+  wake_[0] = static_cast<Handle>(reader);
+  setNonBlocking(reader);
+  setNonBlocking(writer);
+  setNonBlocking(listener);
+#else
+  setNonBlocking(listener);
+#endif
+  return startThread();
 }
 
+#if !_WIN32
 // .............................................................................
-bool SocketServer::startPaired() {
-  if (pipe(wake_) != 0) return false;
-  setNonBlocking(wake_[0]);
-  setNonBlocking(wake_[1]);
-  thread_ = std::thread([this] { loop(); });
-  return true;
-}
+bool SocketServer::startPaired() { return startThread(); }
 
 // .............................................................................
 int SocketServer::connectPair() {
   int fds[2] = {-1, -1};
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return -1;
   setNonBlocking(fds[0]);
-  const int on = 1;
-  setsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+  noSigPipe(fds[0]);
   // Not inherited by anything but the editor the caller starts with it.
   fcntl(fds[0], F_SETFD, FD_CLOEXEC);
   fcntl(fds[1], F_SETFD, FD_CLOEXEC);
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (pendingFd_ >= 0) close(pendingFd_);
+    if (pendingFd_ != kNone) close(pendingFd_);
     pendingFd_ = fds[0];
   }
   wake();
   return fds[1];
 }
+#endif
 
 // .............................................................................
 void SocketServer::send(const aud::Json& message, bool droppable) {
@@ -166,16 +306,29 @@ void SocketServer::disconnect(uint64_t connection) {
   wake();
 }
 
+bool SocketServer::startThread() {
+#if !_WIN32
+  int fds[2] = {-1, -1};
+  if (pipe(fds) != 0) return false;
+  wake_[0] = fds[0];
+  wake_[1] = fds[1];
+  setNonBlocking(wake_[0]);
+  setNonBlocking(wake_[1]);
+#endif
+  thread_ = std::thread([this] { loop(); });
+  return true;
+}
+
 void SocketServer::wake() {
-  if (wake_[1] < 0) return;
+  if (wake_[1] == kNone) return;
   const char byte = 1;
-  (void)write(wake_[1], &byte, 1);
+  (void)writeSome(static_cast<Native>(wake_[1]), &byte, 1);
 }
 
 void SocketServer::closeConnection() {
-  if (connFd_ < 0) return;
-  close(connFd_);
-  connFd_ = -1;
+  if (connFd_ == kNone) return;
+  closeSocket(static_cast<Native>(connFd_));
+  connFd_ = kNone;
   inbox_.clear();
   writing_.clear();
   written_ = 0;
@@ -193,7 +346,7 @@ void SocketServer::closeConnection() {
 
 // [IPC thread] The plugin's end of a new pair replaces the connection: the
 // plugin started a new editor.
-void SocketServer::adopt(int fd) {
+void SocketServer::adopt(Handle fd) {
   closeConnection();
   connFd_ = fd;
   const uint64_t connection = ++lastConnection_;
@@ -209,27 +362,25 @@ void SocketServer::adopt(int fd) {
 // A new connection replaces one that is not authenticated or already gone;
 // while the editor's connection lives, a further one is refused.
 void SocketServer::accept() {
-  const int fd = ::accept(listenFd_, nullptr, nullptr);
-  if (fd < 0) return;
+  const Native fd = ::accept(static_cast<Native>(listenFd_), nullptr, nullptr);
+  if (fd == static_cast<Native>(kNone)) return;
   setNonBlocking(fd);
-  const int on = 1;
-  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
-  if (connFd_ >= 0) {
+#if !_WIN32
+  noSigPipe(fd);
+#endif
+  if (connFd_ != kNone) {
     bool authenticated = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       authenticated = authenticated_ != 0 && authenticated_ == connection_;
     }
-    char byte = 0;
-    const ssize_t n = recv(connFd_, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
-    const bool alive = n > 0 || (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
-    if (authenticated && alive) {
-      close(fd);
+    if (authenticated && stillOpen(static_cast<Native>(connFd_))) {
+      closeSocket(fd);
       return;
     }
     closeConnection();
   }
-  connFd_ = fd;
+  connFd_ = static_cast<Handle>(fd);
   const uint64_t connection = ++lastConnection_;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -240,21 +391,16 @@ void SocketServer::accept() {
   onState_(true, connection);
 }
 
-bool SocketServer::readFrom(int fd) {
+bool SocketServer::readFrom(Handle fd) {
   char buffer[65536];
   bool open = true;
   for (;;) {
-    const ssize_t n = read(fd, buffer, sizeof(buffer));
+    const long n = readSome(static_cast<Native>(fd), buffer, sizeof(buffer));
     if (n > 0) {
       inbox_.append(buffer, static_cast<size_t>(n));
       continue;
     }
-    if (n == 0) {
-      open = false;
-      break;
-    }
-    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-    if (errno == EINTR) continue;
+    if (n == -2) break;
     open = false;
     break;
   }
@@ -286,18 +432,27 @@ bool SocketServer::parseFrames() {
 void SocketServer::loop() {
   while (!stopping_) {
     bool wantWrite = !writing_.empty();
-    if (!wantWrite && connFd_ >= 0) {
+    if (!wantWrite && connFd_ != kNone) {
       std::lock_guard<std::mutex> lock(mutex_);
       wantWrite = !outbox_.empty();
     }
-    pollfd fds[3] = {{wake_[0], POLLIN, 0}, {listenFd_, POLLIN, 0},
-                     {connFd_, static_cast<short>(POLLIN | (wantWrite ? POLLOUT : 0)), 0}};
-    const nfds_t count = connFd_ >= 0 ? 3 : 2;
-    if (poll(fds, count, 1000) < 0 && errno != EINTR) break;
+    // The entries in use come first: the wake channel, the listening socket
+    // if there is one, the connection if there is one.
+    PollEntry fds[3] = {};
+    unsigned long count = 0;
+    fds[count++] = {static_cast<Native>(wake_[0]), POLLIN, 0};
+    const int listenAt = listenFd_ != kNone ? static_cast<int>(count) : -1;
+    if (listenAt >= 0) fds[count++] = {static_cast<Native>(listenFd_), POLLIN, 0};
+    const int connAt = connFd_ != kNone ? static_cast<int>(count) : -1;
+    if (connAt >= 0) {
+      fds[count++] = {static_cast<Native>(connFd_),
+                      static_cast<short>(POLLIN | (wantWrite ? POLLOUT : 0)), 0};
+    }
+    if (pollAll(fds, count, 1000) < 0 && !interrupted()) break;
     if (stopping_) break;
     if (fds[0].revents & POLLIN) {
       char drain[256];
-      while (read(wake_[0], drain, sizeof(drain)) > 0) {
+      while (readSome(static_cast<Native>(wake_[0]), drain, sizeof(drain)) > 0) {
       }
     }
     {
@@ -310,22 +465,22 @@ void SocketServer::loop() {
       if (requested) closeConnection();
     }
     {
-      int pending = -1;
+      Handle pending = kNone;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         std::swap(pending, pendingFd_);
       }
-      if (pending >= 0) {
+      if (pending != kNone) {
         adopt(pending);
         continue;
       }
     }
-    if (fds[1].revents & POLLIN) {
+    if (listenAt >= 0 && (fds[listenAt].revents & POLLIN)) {
       accept();
       continue;
     }
-    if (connFd_ < 0) continue;
-    if ((count == 3) && (fds[2].revents & (POLLIN | POLLHUP | POLLERR))) {
+    if (connFd_ == kNone) continue;
+    if (connAt >= 0 && (fds[connAt].revents & (POLLIN | POLLHUP | POLLERR))) {
       if (!readFrom(connFd_)) {
         closeConnection();
         continue;
@@ -341,8 +496,8 @@ void SocketServer::loop() {
         outboxBytes_ -= writing_.size();
         written_ = 0;
       }
-      const ssize_t n = write(connFd_, writing_.data() + written_,
-                              writing_.size() - written_);
+      const long n = writeSome(static_cast<Native>(connFd_), writing_.data() + written_,
+                               writing_.size() - written_);
       if (n > 0) {
         written_ += static_cast<size_t>(n);
         if (written_ == writing_.size()) {
@@ -351,8 +506,7 @@ void SocketServer::loop() {
         }
         continue;
       }
-      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-      if (n < 0 && errno == EINTR) continue;
+      if (n == -2) break;
       closeConnection();
       break;
     }

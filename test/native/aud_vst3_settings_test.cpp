@@ -115,6 +115,25 @@ int main() {
       expectEqual(decodeState(R"({"schema": 1, "params": {"x": 1}})", &back, &error), false);
       expectEqual(decodeState("no json", &back, &error), false);
     });
+    test("keeps the editor's settings as the editor wrote them", [] {
+      ShellState state;
+      state.preset = "a";
+      state.editor = R"({"hold":true,"preferences":{"key":["s","dMajor"]}})";
+      ShellState back;
+      std::string error;
+      expectEqual(decodeState(encodeState(state), &back, &error), true);
+      expectEqual(back.editor, state.editor);
+    });
+    test("reads a state without the editor's settings, refuses too long ones", [] {
+      ShellState back;
+      std::string error;
+      expectEqual(decodeState(R"({"schema": 1, "preset": "a"})", &back, &error), true);
+      expectEqual(back.editor, std::string());
+      ShellState state;
+      state.editor = std::string(kMaxEditorSettings + 1, 'x');
+      expectEqual(decodeState(encodeState(state), &back, &error), false);
+      expectEqual(decodeState(R"({"schema": 1, "editor": 3})", &back, &error), false);
+    });
   });
   return aud_vst3_test::finish();
 }

@@ -71,7 +71,7 @@ using namespace Steinberg;
 namespace {
 
 // The version of the shell protocol (audShellProtocolVersion).
-constexpr int kProtocolVersion = 2;
+constexpr int kProtocolVersion = 3;
 
 // The prefix of the frames' Mach name for an editor without app group.
 constexpr const char* kDefaultMachPrefix = "io.audaudio";
@@ -836,6 +836,7 @@ void EditorHost::open(uint32_t instance) {
   welcome.set("params", welcomeParams(*plugin));
   welcome.set("presets", welcomePresets(*plugin));
   welcome.set("preset", number(plugin->preset()));
+  welcome.set("settings", aud::Json::ofString(plugin->editorSettings()));
   const aud::Json place = it->second.view->place();
   for (const char* key : {"width", "height", "scale"}) {
     const aud::Json* value = place.find(key);
@@ -1141,6 +1142,15 @@ void EditorHost::handle(const aud::Json& json, uint64_t connection) {
       midi.push_back(static_cast<uint8_t>(byte.integer()));
     }
     if (!plugin->editorMidi(midi)) logError("The editor's MIDI overflowed");
+    return;
+  }
+  if (kind == "settings") {
+    // The settings of the instance, kept with the project (ticket 38).
+    const aud::Json* settings = json.find("settings");
+    if (settings != nullptr && settings->isString() &&
+        !plugin->setEditorSettings(settings->string)) {
+      logError("The editor's settings are too long");
+    }
     return;
   }
   if (kind == "selectPreset") {

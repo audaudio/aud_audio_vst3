@@ -71,5 +71,10 @@ void main() {
         closeFd(fd);
       }
     });
-  });
+    // A POSIX socket pair carries these tests (ticket 38).
+  }, testOn: '!windows');
+
+  test('AudShellFd.open(fd) refuses on Windows', () {
+    expect(AudShellFd.open(3), throwsUnsupportedError);
+  }, testOn: 'windows');
 }

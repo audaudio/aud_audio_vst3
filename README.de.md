@@ -6,7 +6,8 @@ Teil der Audanika Audio Engine; geplant in [aud_audio_pm](https://github.com/aud
 
 ## Was das Paket enthält (Ticket 37)
 
-Die VST3-Shell der Engine (Schritt S18, macOS auf Apple Silicon): ein
+Die VST3-Shell der Engine (Schritt S18, macOS auf Apple Silicon und seit
+Ticket 38 Windows auf x86-64): ein
 Instrument-Plugin über dem Headless Host von `aud_audio_graph`, das eine
 App mit drei Dateien konfiguriert - `plugin.json`, ein Graph-Dokument und
 seine Presets ([doc/plugin-bundle.md](doc/plugin-bundle.md)) - und mit den
@@ -70,6 +71,19 @@ Node-Paketen baut, die sie nennt.
   Frames und Stockungen ins Unified Log; `AUD_VST3_LOG=<datei>` sammelt ihre
   Zeilen in einem Test. Ohne `editor` zeigt das Plugin die generische View
   der DAW.
+- Windows (Ticket 38, Entscheidungen plugin-008 und plugin-009): Das Bundle
+  ist eine x86-64-DLL in `Contents\x86_64-win`, gebaut vom clang++ aus
+  Visual Studio gegen die statische C++-Runtime; sie exportiert nur
+  `GetPluginFactory`, `InitDll` und `ExitDll`, was der Build prüft. Eine App
+  baut es in ihren eigenen Ordner und verlinkt es per Junction in einen
+  VST3-Ordner; das Plugin findet Inhalte und Editor über
+  `containing-folder:<pfad>` in `plugin.json`. Der Editor ist ein
+  Programm (`editor`: `containing-folder:<exe>`), das das Plugin für jede
+  offene View in einem Job-Objekt mit `--plugin-editor --socket <pfad>
+  --token <hex> --instance <n> --parent <fenster>` startet: Es macht seine
+  Flutter-View zum Kind des Plugin-Fensters und spricht über ein
+  Unix-Domain-Socket in `%TEMP%` (`src/aud_vst3_editor_win.cpp`). Die Logs
+  gehen an die Debug-Ausgabe (`OutputDebugString`).
 - Die Teilmenge des VST3 SDK 3.8.1 (MIT) in `src/third_party/vst3sdk`;
   siehe `src/third_party/NOTICES.md`.
 
@@ -82,7 +96,10 @@ File-Deskriptor 3 übergibt (`AudShellClient.fromFd`, gelesen und
 geschrieben von `AudShellFd` über FFI, da `dart:io` kein geerbtes Socket
 öffnet), oder über ein Unix-Domain-Socket, auf dem das Plugin lauscht
 (`AudShellClient.connect`). `example/aud_audio_vst3_example.dart` spielt
-beide Enden in einem Prozess durch.
+beide Enden in einem Prozess durch. Unter Windows, das einem Prozess kein
+Socket als Dateideskriptor übergibt, werfen `AudShellFd.open` und damit
+`AudShellClient.fromFd` einen `UnsupportedError`; der Editor verbindet sich
+dort mit `AudShellClient.connect`.
 
 ```dart
 import 'dart:io';
@@ -109,7 +126,8 @@ await editor.close();                                // beide Richtungen zugleic
   beendet beide Richtungen.
 - Vom Plugin: `AudShellWelcome` (die `AudShellParam`s des Dokuments, Größe
   und Skalierung des Editors, die Presets als `AudShellPresetInfo`s und das
-  aktuelle), `AudShellPreset` (das Plugin spielt ein anderes Preset),
+  aktuelle, dazu die `settings` des Editors), `AudShellPreset` (das Plugin
+  spielt ein anderes Preset),
   `AudShellParamValue` (ein Parameter hat sich im Plugin geändert),
   `AudShellInput` (ein Eingabe-Ereignis der View des Plugins, von einer
   `AudShellInputKind`), `AudShellPlace` (wo die View des Plugins auf dem
@@ -120,8 +138,11 @@ await editor.close();                                // beide Richtungen zugleic
   Plugin spielt und an die DAW sendet), `AudShellSelectPreset`,
   `AudShellCommand` (ein `AudCommand` aus `aud_audio_core` mit dem
   Zeitstempel der Eingabe dahinter), `AudShellGesture`
-  (`AudShellGesturePhase.begin` und `end` einer Automations-Bearbeitung)
-  und `AudShellCursor`.
+  (`AudShellGesturePhase.begin` und `end` einer Automations-Bearbeitung),
+  `AudShellCursor` und `AudShellSettings` (die Einstellungen des Editors für
+  die Instanz als Text in seinem eigenen Format, die das Plugin mit dem
+  Projekt der DAW speichert und in jedem Welcome zurückgibt;
+  Protokollversion 3, Ticket 38).
 - Jede Nachricht nennt die Plugin-Instanz (`instance`), zu der sie gehört;
   `AudShellMessage.fromJson` liest, was `toJson` schreibt.
 - `AudShellCodec.encode(message)` rahmt eine Nachricht: eine 4-Byte-Länge
@@ -162,3 +183,11 @@ mit dem Projekt wiederhergestellt, sein Editor gezeigt und aufgenommen
 (`--plugin <name>`, `--show-editor s`). `vendor-vst3sdk.js` übernimmt die
 Teilmenge des VST3 SDK nach `src/third_party/vst3sdk` und schreibt
 `src/third_party/NOTICES.md`.
+
+Unter Windows nehmen die Skripte clang++, lld-link und llvm-readobj aus dem
+LLVM von Visual Studio (Komponente „C++-Clang-Compiler für Windows“);
+`build-plugin.js --install` kopiert das Bundle nach
+`%LOCALAPPDATA%\Programs\Common\VST3`, das REAPER und Cubase durchsuchen.
+`build-plugin.js`, `validate.js`, `test-native.js`, `reaper-test.js` und
+`vendor-vst3sdk.js` laufen dort; der Test-Host (`host.js`), der
+RealtimeSanitizer und `--editor` gibt es nur unter macOS.

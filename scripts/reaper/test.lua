@@ -27,11 +27,21 @@ local function record(kind, fields)
   logFile:flush()
 end
 
+-- Saves the project under the path of the test: with -saveas alone REAPER
+-- may keep it unnamed and ask in a dialog (Windows, ticket 38).
+local function save()
+  if reaper.Main_SaveProjectEx then
+    reaper.Main_SaveProjectEx(0, config.project, 0)
+  else
+    reaper.Main_SaveProject(0, false)
+  end
+end
+
 local function quit()
   reaper.OnStopButton()
   record("done")
   logFile:close()
-  reaper.Main_SaveProject(0, false)
+  save()
   reaper.Main_OnCommand(40004, 0) -- File: Quit REAPER
 end
 
@@ -98,7 +108,7 @@ end
 -- The last preset of the list stays and is saved with the project.
 local saved = presets > 1 and 1 or 0
 reaper.TrackFX_SetParamNormalized(track, fx, presetParam, saved)
-reaper.Main_SaveProject(0, false)
+save()
 record("saved", string.format(',"preset":%.4f', saved))
 
 -- Live: play the item and take the track's peak.

@@ -8,7 +8,8 @@
 // compile settings of scripts/build-plugin.js: every test is linked with the
 // sources it covers into an executable under .dart_tool/vst3-build/test,
 // which runs its tests and reports the failures. Exits with 1 when a test
-// fails or does not build.
+// fails or does not build. On Windows (ticket 38) the tests of POSIX code
+// are skipped.
 //
 //   node scripts/test-native.js           every test
 //   node scripts/test-native.js socket    the tests whose file name holds it
@@ -23,8 +24,11 @@ const {
   root,
   sdkDir,
   buildDir,
+  windows,
   frameworks,
+  systemLibraries,
   targetFlags,
+  sdkFlags,
   run,
   packageSrcOf,
   sdkSources,
@@ -39,8 +43,15 @@ const {
 const testDir = path.join(root, 'test', 'native');
 
 // The tests: the sources each covers, whether it needs the graph engine and
-// the vendored SDK.
+// the vendored SDK, and whether it covers POSIX code.
 const tests = [
+  {
+    file: 'aud_vst3_bundle_test.cpp',
+    sources: [
+      'src/aud_vst3_bundle.cpp',
+      windows ? 'src/aud_vst3_bundle_win.cpp' : 'src/aud_vst3_bundle_mac.mm',
+    ],
+  },
   {
     file: 'aud_vst3_midi_test.cpp',
     sources: ['src/aud_vst3_midi.cpp'],
@@ -70,9 +81,10 @@ const tests = [
 // what a test's sources need.
 async function sdkLibrary(compiler, flags, objDir, headers) {
   const objects = await compileAll(compiler, flags, sdkSources(), objDir, headers);
-  const library = path.join(objDir, `vst3sdk-${hashOf(objects)}.a`);
+  const library = path.join(objDir, `vst3sdk-${hashOf(objects)}${windows ? '.lib' : '.a'}`);
   if (!fs.existsSync(library)) {
-    run('libtool', ['-static', '-no_warning_for_no_symbols', '-o', library, ...objects]);
+    if (windows) run('llvm-lib', [`/OUT:${library}`, ...objects]);
+    else run('libtool', ['-static', '-no_warning_for_no_symbols', '-o', library, ...objects]);
   }
   return library;
 }
@@ -83,7 +95,7 @@ async function buildTest(test) {
   const compiler = compilerOf(options);
   const packageSrc = packageSrcOf(path.join(root, '.dart_tool', 'package_config.json'));
   const dirs = { graph: packageSrc('aud_audio_graph'), core: packageSrc('aud_audio_core') };
-  const flags = baseFlags(options, dirs);
+  const flags = [...baseFlags(options, dirs), ...sdkFlags];
   const objDir = path.join(buildDir, 'test');
   const headers = headersHash([sdkDir, dirs.graph, dirs.core, path.join(root, 'src'), testDir]);
   const files = [
@@ -96,7 +108,7 @@ async function buildTest(test) {
   const libraries = test.sdk ? [await sdkLibrary(compiler, flags, objDir, headers)] : [];
   const binary = path.join(
     objDir,
-    `${path.basename(test.file, '.cpp')}-${hashOf([...objects, ...libraries])}`,
+    `${path.basename(test.file, '.cpp')}-${hashOf([...objects, ...libraries])}${windows ? '.exe' : ''}`,
   );
   if (!fs.existsSync(binary)) {
     run(compiler, [
@@ -106,6 +118,7 @@ async function buildTest(test) {
       ...objects,
       ...libraries,
       ...frameworks.flatMap((framework) => ['-framework', framework]),
+      ...(windows ? ['-fuse-ld=lld', ...systemLibraries.map((library) => `-l${library}`)] : []),
     ]);
   }
   return binary;
@@ -120,6 +133,10 @@ async function main() {
   const failed = [];
   for (const test of selected) {
     const name = path.basename(test.file, '.cpp');
+    if (windows && test.posix) {
+      console.log(`${name}: skipped on Windows`);
+      continue;
+    }
     console.log(`${name}:`);
     const binary = await buildTest(test);
     const result = spawnSync(binary, [], { stdio: 'inherit' });

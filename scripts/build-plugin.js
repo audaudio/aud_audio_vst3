@@ -13,10 +13,14 @@
 // code (build-001) by the recipes below, which mirror their build hooks.
 //
 // The bundle exports only the three VST3 entry points and hides all other
-// symbols (plugin-004): -fvisibility=hidden and an exported-symbols list, so
-// that two plugins over the engine never share code in one DAW process. It
-// is built for Apple silicon (release-005) and signed with the hardened
-// runtime: by `--sign <identity>`, ad hoc without.
+// symbols (plugin-004), so that two plugins over the engine never share code
+// in one DAW process. On macOS it is built for Apple silicon (release-005)
+// with -fvisibility=hidden and an exported-symbols list, and signed with the
+// hardened runtime: by `--sign <identity>`, ad hoc without. On Windows
+// (ticket 38) it is a DLL for x86-64, built by the clang++ and lld-link of
+// Visual Studio against the static C++ runtime, so that the DAW's machine
+// needs no runtime of Visual Studio; it exports what the SDK marks for
+// export, which the build checks, and the engine's AUD_EXPORT is empty.
 //
 // Objects are cached under .dart_tool/vst3-build by the hash of their
 // source, the flags and all headers the build may include.
@@ -29,7 +33,10 @@
 //
 // --editor puts the built editor app - signed by its own build with the App
 // Sandbox and the app group - into Contents/Helpers under the name
-// plugin.json gives it as `editor`; the bundle is signed around it.
+// plugin.json gives it as `editor`; the bundle is signed around it (macOS).
+// --install copies the bundle into the user's VST3 folder:
+// ~/Library/Audio/Plug-Ins/VST3 on macOS,
+// %LOCALAPPDATA%\Programs\Common\VST3 on Windows.
 
 'use strict';
 
@@ -38,41 +45,91 @@ const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { fileURLToPath, pathToFileURL } = require('node:url');
+
+const windows = process.platform === 'win32';
+
+// On Windows, clang++, lld-link and llvm-readobj come from the LLVM of
+// Visual Studio (component "C++ Clang compiler for Windows"), as in the
+// native tests of the family's packages (ticket 38).
+function useVisualStudioLlvm() {
+  const vswhere = path.join(
+    process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)',
+    'Microsoft Visual Studio',
+    'Installer',
+    'vswhere.exe',
+  );
+  const found = spawnSync(
+    vswhere,
+    ['-latest', '-products', '*', '-find', 'VC/Tools/Llvm/x64/bin/clang++.exe'],
+    { encoding: 'utf8' },
+  );
+  const clang = found.status === 0 ? found.stdout.split(/\r?\n/)[0].trim() : '';
+  if (!clang) throw new Error('Install the C++ Clang compiler of Visual Studio');
+  if (!process.env.PATH.split(path.delimiter).includes(path.dirname(clang))) {
+    process.env.PATH = [path.dirname(clang), process.env.PATH].join(path.delimiter);
+  }
+}
+if (windows) useVisualStudioLlvm();
 
 const root = path.resolve(__dirname, '..');
 const sdkDir = path.join(root, 'src', 'third_party', 'vst3sdk');
 const buildDir = path.join(root, '.dart_tool', 'vst3-build');
-const installDir = path.join(os.homedir(), 'Library', 'Audio', 'Plug-Ins', 'VST3');
+const installDir = windows
+  ? path.join(
+      process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+      'Programs',
+      'Common',
+      'VST3',
+    )
+  : path.join(os.homedir(), 'Library', 'Audio', 'Plug-Ins', 'VST3');
 const exampleConfig = path.join(root, 'example', 'plugin', 'plugin.json');
 
-// The shell's own sources.
+// The shell's own sources: those of every platform, then those of macOS or
+// Windows.
 const shellSources = [
-  'src/aud_vst3_bundle.mm',
-  'src/aud_vst3_editor.mm',
+  'src/aud_vst3_bundle.cpp',
   'src/aud_vst3_engine.cpp',
   'src/aud_vst3_factory.cpp',
   'src/aud_vst3_midi.cpp',
-  'src/aud_vst3_objc.mm',
   'src/aud_vst3_param.cpp',
   'src/aud_vst3_plugin.cpp',
   'src/aud_vst3_settings.cpp',
   'src/aud_vst3_socket.cpp',
-  'src/aud_vst3_surfaces.mm',
+  'src/aud_vst3_sync.cpp',
   'src/aud_vst3_transport.cpp',
+  'src/aud_vst3_ui_thread.cpp',
+  ...(windows
+    ? ['src/aud_vst3_bundle_win.cpp', 'src/aud_vst3_editor_win.cpp']
+    : [
+        'src/aud_vst3_bundle_mac.mm',
+        'src/aud_vst3_editor.mm',
+        'src/aud_vst3_objc.mm',
+        'src/aud_vst3_surfaces.mm',
+      ]),
 ];
 
-const frameworks = [
-  'AppKit',
-  'CoreAudio',
-  'CoreFoundation',
-  'CoreGraphics',
-  'Foundation',
-  'IOSurface',
-  'QuartzCore',
-];
+// What the bundle links of the system: frameworks on macOS, libraries on
+// Windows.
+const frameworks = windows
+  ? []
+  : ['AppKit', 'CoreAudio', 'CoreFoundation', 'CoreGraphics', 'Foundation', 'IOSurface', 'QuartzCore'];
+const systemLibraries = windows
+  ? ['user32', 'gdi32', 'shell32', 'ole32', 'advapi32', 'ws2_32']
+  : [];
 
-// The machine every object and binary is built for.
-const targetFlags = ['-arch', 'arm64', '-mmacosx-version-min=12.0'];
+// The machine every object and binary is built for: Apple silicon, or
+// x86-64 Windows with the static C++ runtime.
+const targetFlags = windows
+  ? ['--target=x86_64-pc-windows-msvc', '-fms-runtime-lib=static']
+  : ['-arch', 'arm64', '-mmacosx-version-min=12.0'];
+
+// The folder of the binary inside Contents, as the VST3 bundle format names
+// it for the platform.
+const binaryFolder = windows ? 'x86_64-win' : 'MacOS';
+
+// The entry points a bundle exports on Windows (plugin-004).
+const windowsExports = ['ExitDll', 'GetPluginFactory', 'InitDll'];
 
 // ............................................................................
 // The node packages: what their build hooks compile, the function that
@@ -112,8 +169,14 @@ const recipes = {
         'HAVE_FSEEKO',
         'HAVE___BUILTIN_CLZ',
         'NOMINMAX',
+        // M_PI and its kin in the C runtime of Windows.
+        ...(windows ? ['_USE_MATH_DEFINES'] : []),
       ],
-      flags: [],
+      // As the hook on Windows: sfizz's AVX objects carry no __AVX__ guard,
+      // so all of it is built for AVX; simde needs <cmath> first.
+      flags: windows ? ['-mavx', '-include', 'aud_windows_math.h'] : [],
+      // CommandLineToArgvW of ghc::filesystem.
+      libraries: windows ? ['shell32'] : [],
       register: 'aud_dsp_sampler_register',
       voiceBudget: 'aud_dsp_sampler_set_voice_budget',
       notices: [path.join(src, 'third_party', 'NOTICES.md')],
@@ -150,8 +213,13 @@ const recipes = {
       defines: ['_GNU_SOURCE'],
       flags: [],
       // QuickJS-ng as gg_quickjs builds it: unsigned char, no warnings of
-      // third-party code.
-      cFlags: ['-funsigned-char', '-w'],
+      // third-party code, and on Windows the defines of
+      // QuickjsNgBuild.defines, which the package's C++ files do not take.
+      cFlags: [
+        '-funsigned-char',
+        '-w',
+        ...(windows ? ['-DWIN32_LEAN_AND_MEAN', '-D_WIN32_WINNT=0x0601'] : []),
+      ],
       register: 'aud_audio_script_register',
       notices: [
         path.join(src, 'third_party', 'NOTICES.md'),
@@ -208,9 +276,17 @@ function packageSrcOf(configPath) {
   return (name) => {
     const entry = config.packages.find((p) => p.name === name);
     if (!entry) throw new Error(`Package ${name} is not in ${configPath}`);
-    const rootUri = new URL(entry.rootUri, `file://${configPath}`);
-    return path.join(decodeURIComponent(rootUri.pathname), 'src');
+    const rootUri = new URL(entry.rootUri, pathToFileURL(configPath));
+    return path.join(fileURLToPath(rootUri), 'src');
   };
+}
+
+// Whether a source of the vendored SDK builds on this platform: the
+// manifests list those of macOS and Windows (scripts/vendor-vst3sdk.js).
+function forPlatform(file) {
+  const macOnly = file.endsWith('.mm') || /\/(macmain|module_mac)\.\w+$/.test(file);
+  const windowsOnly = /_win32\.cpp$/.test(file) || file.endsWith('/dllmain.cpp');
+  return windows ? !macOnly : !windowsOnly;
 }
 
 // The sources of the vendored SDK subset. vstsinglecomponenteffect.cpp
@@ -219,6 +295,7 @@ function packageSrcOf(configPath) {
 function sdkSources() {
   return readList(path.join(sdkDir, 'SOURCES.txt'))
     .filter((file) => file !== 'public.sdk/source/vst/vsteditcontroller.cpp')
+    .filter(forPlatform)
     .map((file) => path.join(sdkDir, file));
 }
 
@@ -228,9 +305,11 @@ function hashOf(parts) {
   return hash.digest('hex').slice(0, 20);
 }
 
-// The compiler: Apple's clang, or LLVM from Homebrew for RealtimeSanitizer.
+// The compiler: Apple's clang or that of Visual Studio, or LLVM from
+// Homebrew for RealtimeSanitizer.
 function compilerOf(options) {
   if (!options.rtsan) return 'clang++';
+  if (windows) throw new Error('RealtimeSanitizer builds run on macOS only');
   for (const candidate of [
     process.env.AUD_RTSAN_CXX,
     '/opt/homebrew/opt/llvm/bin/clang++',
@@ -262,6 +341,14 @@ function baseFlags(options, dirs) {
     '-I',
     path.join(root, 'src'),
   ];
+  if (windows) {
+    flags.push(
+      '-DNOMINMAX',
+      '-D_CRT_SECURE_NO_WARNINGS',
+      // The engine compiled into the bundle exports nothing of its own.
+      '-DAUD_EXPORT=',
+    );
+  }
   if (options.rtsan) {
     // The graph and the plugin mark their realtime path nonblocking, so the
     // sanitizer checks everything a block calls (ticket 20, decision 8).
@@ -275,6 +362,12 @@ function baseFlags(options, dirs) {
   if (options.watchdog) flags.push('-DAUD_GRAPH_WATCHDOG=1');
   return flags;
 }
+
+// The flags of the SDK and of the shell, which includes its headers: on
+// Windows the SDK calls the wide functions, as its CMake defines UNICODE,
+// and its headers push and pop the packing across includes on purpose. The
+// graph and the packages build without, as their hooks do.
+const sdkFlags = windows ? ['-DUNICODE', '-D_UNICODE', '-Wno-pragma-pack'] : [];
 
 function languageFlags(file) {
   if (file.endsWith('.mm')) return ['-x', 'objective-c++', '-std=c++17', '-fobjc-arc'];
@@ -509,7 +602,7 @@ async function build(options) {
   // The SDK, the graph and each package, then the shell with the identity
   // of this plugin and its generated registration.
   const objects = [
-    ...(await compileAll(compiler, flags, sdkSources(), path.join(objDir, 'sdk'), headers)),
+    ...(await compileAll(compiler, [...flags, ...sdkFlags], sdkSources(), path.join(objDir, 'sdk'), headers)),
     ...(await compileAll(compiler, flags, cppIn(dirs.graph), path.join(objDir, 'graph'), headers)),
   ];
   for (const recipe of packageRecipes) {
@@ -536,7 +629,7 @@ async function build(options) {
   objects.push(
     ...(await compileAll(
       compiler,
-      [...flags, ...identityDefines(config)],
+      [...flags, ...sdkFlags, ...identityDefines(config)],
       [...shellSources.map((file) => path.join(root, file)), generated],
       path.join(objDir, 'shell'),
       headers,
@@ -547,28 +640,32 @@ async function build(options) {
   const executable = config.name.replace(/[^A-Za-z0-9_-]/g, '');
   const bundleName = `${executable}.vst3`;
   const bundle = path.join(options.out, bundleName);
-  fs.rmSync(bundle, { recursive: true, force: true });
+  removePath(bundle);
   const contents = path.join(bundle, 'Contents');
-  const macos = path.join(contents, 'MacOS');
+  const binaryDir = path.join(contents, binaryFolder);
   const resources = path.join(contents, 'Resources');
   const settings = path.join(resources, 'aud_plugin');
-  fs.mkdirSync(macos, { recursive: true });
+  fs.mkdirSync(binaryDir, { recursive: true });
   fs.mkdirSync(settings, { recursive: true });
-  const linkArgs = [
-    ...targetFlags,
-    '-bundle',
-    '-o',
-    path.join(macos, executable),
-    ...objects,
-    ...frameworks.flatMap((framework) => ['-framework', framework]),
-    '-Wl,-dead_strip',
-    '-exported_symbols_list',
-    path.join(root, 'src', 'aud_vst3_exports.exp'),
-  ];
-  if (options.rtsan) linkArgs.push('-fsanitize=realtime');
-  run(compiler, linkArgs);
-  fs.writeFileSync(path.join(contents, 'Info.plist'), infoPlist(config, executable));
-  fs.writeFileSync(path.join(contents, 'PkgInfo'), 'BNDL????');
+  if (windows) {
+    linkWindows(compiler, objects, packageRecipes, path.join(binaryDir, bundleName), objDir);
+  } else {
+    const linkArgs = [
+      ...targetFlags,
+      '-bundle',
+      '-o',
+      path.join(binaryDir, executable),
+      ...objects,
+      ...frameworks.flatMap((framework) => ['-framework', framework]),
+      '-Wl,-dead_strip',
+      '-exported_symbols_list',
+      path.join(root, 'src', 'aud_vst3_exports.exp'),
+    ];
+    if (options.rtsan) linkArgs.push('-fsanitize=realtime');
+    run(compiler, linkArgs);
+    fs.writeFileSync(path.join(contents, 'Info.plist'), infoPlist(config, executable));
+    fs.writeFileSync(path.join(contents, 'PkgInfo'), 'BNDL????');
+  }
   fs.writeFileSync(path.join(resources, 'moduleinfo.json'), moduleInfo(config, bundleName));
   for (const file of [
     path.basename(options.config),
@@ -591,6 +688,7 @@ async function build(options) {
     });
   }
   if (options.editor) {
+    if (windows) throw new Error('--editor builds the Helpers of macOS only');
     if (!config.editor) throw new Error(`${options.config} names no editor`);
     const helpers = path.join(contents, 'Helpers');
     fs.mkdirSync(helpers, { recursive: true });
@@ -598,23 +696,74 @@ async function build(options) {
     // bundle's seals it.
     run('ditto', [options.editor, path.join(helpers, config.editor)]);
   }
-  run('codesign', [
-    '--force',
-    '--options',
-    'runtime',
-    '--timestamp=none',
-    '--sign',
-    options.sign,
-    bundle,
-  ]);
+  if (!windows) {
+    run('codesign', [
+      '--force',
+      '--options',
+      'runtime',
+      '--timestamp=none',
+      '--sign',
+      options.sign,
+      bundle,
+    ]);
+  }
   if (options.install) {
     fs.mkdirSync(installDir, { recursive: true });
     const target = path.join(installDir, bundleName);
-    fs.rmSync(target, { recursive: true, force: true });
-    run('ditto', [bundle, target]);
+    removePath(target);
+    if (windows) fs.cpSync(bundle, target, { recursive: true });
+    else run('ditto', [bundle, target]);
   }
   console.log(`Built ${bundle}${options.install ? ' (installed)' : ''}`);
   return bundle;
+}
+
+// Removes `target`: a link or junction itself, never what it points to, or
+// a tree.
+function removePath(target) {
+  let stat;
+  try {
+    stat = fs.lstatSync(target);
+  } catch {
+    return;
+  }
+  if (stat.isSymbolicLink()) fs.unlinkSync(target);
+  else fs.rmSync(target, { recursive: true, force: true });
+}
+
+// Links the DLL of a bundle on Windows (ticket 38) with lld-link: through a
+// response file, as sfizz's objects pass the limit of a command line, with
+// unused code dropped and the import library kept out of the bundle. Fails
+// when the DLL exports other symbols than the entry points.
+function linkWindows(compiler, objects, packageRecipes, binary, objDir) {
+  const libraries = [
+    ...systemLibraries,
+    ...packageRecipes.flatMap((recipe) => recipe.libraries ?? []),
+  ];
+  const args = [
+    ...targetFlags,
+    '-fuse-ld=lld',
+    '-shared',
+    '-o',
+    binary,
+    ...objects,
+    ...[...new Set(libraries)].map((library) => `-l${library}`),
+    `-Wl,/IMPLIB:${path.join(objDir, `${path.basename(binary, '.vst3')}.lib`)}`,
+    '-Wl,/OPT:REF',
+    '-Wl,/OPT:ICF',
+  ];
+  // The response file of clang's GNU driver: quoted, with '/'.
+  const response = path.join(objDir, 'link.rsp');
+  fs.writeFileSync(
+    response,
+    args.map((arg) => `"${arg.replace(/\\/g, '/')}"`).join('\n'),
+  );
+  run(compiler, [`@${response}`]);
+  const exportsOf = run('llvm-readobj', ['--coff-exports', binary]);
+  const names = [...exportsOf.matchAll(/^\s*Name: (\S+)/gm)].map((match) => match[1]).sort();
+  if (names.join(',') !== windowsExports.join(',')) {
+    throw new Error(`${binary} exports ${names.join(', ')}; only ${windowsExports.join(', ')} may leave it`);
+  }
 }
 
 // The compile settings, for scripts/test-native.js and scripts/host.js.
@@ -622,10 +771,14 @@ module.exports = {
   root,
   sdkDir,
   buildDir,
+  windows,
   frameworks,
+  systemLibraries,
   targetFlags,
+  sdkFlags,
   run,
   packageSrcOf,
+  forPlatform,
   sdkSources,
   hashOf,
   compilerOf,
@@ -635,6 +788,7 @@ module.exports = {
   cppIn,
   build,
   parseArgs,
+  useVisualStudioLlvm,
 };
 
 if (require.main === module) {

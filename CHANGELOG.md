@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2026-10-24
+
+### Added
+
+- Add the VST3 shell and its editor on Windows
+- Add the editor settings to the plugin state
+
+### Changed
+
+- Refuse the shell socket on Windows
+- Document the Windows behavior in both languages
+
 ## 0.2.0 - 2026-10-22
 
 ### Added

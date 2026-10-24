@@ -47,9 +47,7 @@ float clamp(const EngineParam& param, float value) {
 
 // .............................................................................
 Engine::Engine()
-    : changes_(1024),
-      wake_(dispatch_semaphore_create(0)),
-      drained_(dispatch_semaphore_create(0)) {
+    : changes_(1024) {
   thread_ = std::thread([this] { loop(); });
 }
 
@@ -68,14 +66,8 @@ Engine::~Engine() {
     std::lock_guard<std::mutex> lock(mutex_);
     stopping_ = true;
   }
-  dispatch_semaphore_signal(wake_);
+  wake_.post();
   thread_.join();
-  // A dispatch semaphore must not be released below its initial count.
-  for (dispatch_semaphore_t semaphore : {wake_, drained_}) {
-    while (dispatch_semaphore_wait(semaphore, DISPATCH_TIME_NOW) == 0) {
-    }
-    dispatch_release(semaphore);
-  }
 }
 
 // .............................................................................
@@ -186,7 +178,7 @@ bool Engine::applyPreset(const ShellPreset& preset, std::string* error) {
 void Engine::requestPreset(uint32_t index) {
   requestedPreset_.store(static_cast<int32_t>(index), std::memory_order_relaxed);
   presetRequests_.fetch_add(1, std::memory_order_release);
-  dispatch_semaphore_signal(wake_);
+  wake_.post();
 }
 
 // .............................................................................
@@ -219,7 +211,7 @@ void Engine::pushParam(uint32_t id, float plain) {
   } else {
     droppedParams_.fetch_add(1, std::memory_order_relaxed);
   }
-  dispatch_semaphore_signal(wake_);
+  wake_.post();
 }
 
 // .............................................................................
@@ -228,9 +220,8 @@ void Engine::waitForParams() {
   const int64_t deadline = aud_clock_now_ns() + kOfflineWaitNs;
   while (taken_.load(std::memory_order_acquire) < target &&
          aud_clock_now_ns() < deadline) {
-    dispatch_semaphore_signal(wake_);
-    dispatch_semaphore_wait(drained_,
-                            dispatch_time(DISPATCH_TIME_NOW, kOfflinePassNs));
+    wake_.post();
+    drained_.waitFor(kOfflinePassNs);
   }
 }
 
@@ -241,9 +232,8 @@ bool Engine::waitForPreset(uint32_t timeoutMs) {
       aud_clock_now_ns() + static_cast<int64_t>(timeoutMs) * 1'000'000;
   while (presetsTaken_.load(std::memory_order_acquire) < target &&
          aud_clock_now_ns() < deadline) {
-    dispatch_semaphore_signal(wake_);
-    dispatch_semaphore_wait(drained_,
-                            dispatch_time(DISPATCH_TIME_NOW, kOfflinePassNs));
+    wake_.post();
+    drained_.waitFor(kOfflinePassNs);
   }
   const int64_t left = (deadline - aud_clock_now_ns()) / 1'000'000;
   int32_t result = AUD_PENDING;
@@ -310,14 +300,13 @@ void Engine::run(const std::function<void()>& task) {
   std::unique_lock<std::mutex> lock(mutex_);
   tasks_.push_back(task);
   const uint64_t ticket = ++tasksQueued_;
-  dispatch_semaphore_signal(wake_);
+  wake_.post();
   done_.wait(lock, [&] { return tasksDone_ >= ticket; });
 }
 
 void Engine::loop() {
   for (;;) {
-    dispatch_semaphore_wait(wake_,
-                            dispatch_time(DISPATCH_TIME_NOW, kIdleWaitNs));
+    wake_.waitFor(kIdleWaitNs);
     std::deque<std::function<void()>> tasks;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -397,7 +386,7 @@ void Engine::drainParams() {
   }
   if (taken > 0) {
     taken_.fetch_add(taken, std::memory_order_release);
-    dispatch_semaphore_signal(drained_);
+    drained_.post();
   }
 }
 
@@ -414,7 +403,7 @@ void Engine::applyRequestedPreset() {
     if (presetApplied_) presetApplied_(static_cast<uint32_t>(index));
   }
   presetsTaken_.store(requests, std::memory_order_release);
-  dispatch_semaphore_signal(drained_);
+  drained_.post();
 }
 
 // Hands one change to the host. The graph's queue refuses it while no block
