@@ -1,15 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-10-24
 
 ### Added
 
 - Add the VST3 shell and its editor on Windows
 - Add the editor settings to the plugin state
-
-Protocol 3: AudShellSettings from the editor, the settings in AudShellWelcome
-The plugin keeps them per instance, saves them in its state and asks the DAW to save
-Both views accept them and hand them to the editor in the welcome
 
 ### Changed
 
@@ -121,7 +117,6 @@ Both views accept them and hand them to the editor in the welcome
 
 - Test host: --reframe resizes the view without onSize, --occlude covers its window
 
-
 ## 0.1.0 - 2026-10-11
 
 ### Added
@@ -170,7 +165,6 @@ Both views accept them and hand them to the editor in the welcome
 - Guard --dest of vendor-vst3sdk.js, check the number options of the REAPER scripts and escape the JSON of the ReaScript
 
 - Document the Dart API, the scripts and the editor; translate the German README
-
 
 ## 0.0.2 - 2026-10-08
 
