@@ -72,6 +72,7 @@ void main() {
         'version': audShellProtocolVersion,
         'presets': <Object?>[],
         'preset': -1,
+        'settings': '',
       },
     ),
     (
@@ -84,6 +85,7 @@ void main() {
         scale: 2,
         presets: [AudShellPresetInfo(id: 'a', name: 'A')],
         preset: 0,
+        settings: '{"hold":true}',
       ),
       {
         'type': 'welcome',
@@ -98,6 +100,7 @@ void main() {
           {'id': 'a', 'name': 'A'},
         ],
         'preset': 0,
+        'settings': '{"hold":true}',
       },
     ),
     (
@@ -107,6 +110,10 @@ void main() {
     (
       const AudShellSelectPreset(4, instance: 1),
       {'type': 'selectPreset', 'instance': 1, 'index': 4},
+    ),
+    (
+      const AudShellSettings('{"hold":true}', instance: 1),
+      {'type': 'settings', 'instance': 1, 'settings': '{"hold":true}'},
     ),
     (
       const AudShellMidi([0x90, 60, 100], instance: 1),
@@ -247,6 +254,21 @@ void main() {
           'AudShellClose({type: close})',
         );
       });
+    });
+  });
+
+  group('AudShellWelcome.fromJson(json)', () {
+    test('takes no settings from a plugin of version 2', () {
+      final welcome = AudShellWelcome.fromJson({
+        'type': 'welcome',
+        'name': 'Audanika',
+        'params': <Object?>[],
+        'width': 1024,
+        'height': 640,
+        'scale': 1,
+        'version': 2,
+      });
+      expect(welcome.settings, isEmpty);
     });
   });
 

@@ -66,7 +66,7 @@ using namespace Steinberg;
 namespace {
 
 // The version of the shell protocol (audShellProtocolVersion).
-constexpr int kProtocolVersion = 2;
+constexpr int kProtocolVersion = 3;
 
 // How long a started editor may take to say hello before it is ended and
 // started again.
@@ -607,6 +607,15 @@ class EditorView : public CPluginView,
       }
       return;
     }
+    if (kind == "settings") {
+      // The settings of the instance, kept with the project (ticket 38).
+      const aud::Json* settings = json.find("settings");
+      if (settings != nullptr && settings->isString() &&
+          !plugin_->setEditorSettings(settings->string)) {
+        logError("The editor's settings are too long");
+      }
+      return;
+    }
     if (kind == "selectPreset") {
       const std::optional<int64_t> index = integerIn(
           json, "index", 0, static_cast<int64_t>(plugin_->settings().presets.size()) - 1);
@@ -657,6 +666,7 @@ class EditorView : public CPluginView,
     welcome.set("params", welcomeParams(*plugin_));
     welcome.set("presets", welcomePresets(*plugin_));
     welcome.set("preset", number(plugin_->preset()));
+    welcome.set("settings", aud::Json::ofString(plugin_->editorSettings()));
     const aud::Json geometry = place();
     for (const char* key : {"width", "height", "scale"}) {
       const aud::Json* value = geometry.find(key);

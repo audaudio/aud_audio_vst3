@@ -126,7 +126,8 @@ await editor.close();                                // beide Richtungen zugleic
   beendet beide Richtungen.
 - Vom Plugin: `AudShellWelcome` (die `AudShellParam`s des Dokuments, Größe
   und Skalierung des Editors, die Presets als `AudShellPresetInfo`s und das
-  aktuelle), `AudShellPreset` (das Plugin spielt ein anderes Preset),
+  aktuelle, dazu die `settings` des Editors), `AudShellPreset` (das Plugin
+  spielt ein anderes Preset),
   `AudShellParamValue` (ein Parameter hat sich im Plugin geändert),
   `AudShellInput` (ein Eingabe-Ereignis der View des Plugins, von einer
   `AudShellInputKind`), `AudShellPlace` (wo die View des Plugins auf dem
@@ -137,8 +138,11 @@ await editor.close();                                // beide Richtungen zugleic
   Plugin spielt und an die DAW sendet), `AudShellSelectPreset`,
   `AudShellCommand` (ein `AudCommand` aus `aud_audio_core` mit dem
   Zeitstempel der Eingabe dahinter), `AudShellGesture`
-  (`AudShellGesturePhase.begin` und `end` einer Automations-Bearbeitung)
-  und `AudShellCursor`.
+  (`AudShellGesturePhase.begin` und `end` einer Automations-Bearbeitung),
+  `AudShellCursor` und `AudShellSettings` (die Einstellungen des Editors für
+  die Instanz als Text in seinem eigenen Format, die das Plugin mit dem
+  Projekt der DAW speichert und in jedem Welcome zurückgibt;
+  Protokollversion 3, Ticket 38).
 - Jede Nachricht nennt die Plugin-Instanz (`instance`), zu der sie gehört;
   `AudShellMessage.fromJson` liest, was `toJson` schreibt.
 - `AudShellCodec.encode(message)` rahmt eine Nachricht: eine 4-Byte-Länge

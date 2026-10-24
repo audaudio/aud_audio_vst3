@@ -118,7 +118,8 @@ await editor.close();                                // both directions at once
   ends both directions.
 - From the plugin: `AudShellWelcome` (the document's `AudShellParam`s, the
   editor's size and scale, the presets as `AudShellPresetInfo`s and the
-  current one), `AudShellPreset` (the plugin plays another preset),
+  current one, and the editor's `settings`), `AudShellPreset` (the plugin
+  plays another preset),
   `AudShellParamValue` (a parameter changed in the plugin),
   `AudShellInput` (an input event of the plugin's view, of an
   `AudShellInputKind`), `AudShellPlace` (where the plugin's view is on the
@@ -130,7 +131,10 @@ await editor.close();                                // both directions at once
   `AudShellCommand` (an `AudCommand` of `aud_audio_core` with the time
   stamp of the input behind it),
   `AudShellGesture` (`AudShellGesturePhase.begin` and `end` of an
-  automation edit) and `AudShellCursor`.
+  automation edit), `AudShellCursor` and `AudShellSettings` (the editor's
+  settings of the instance as a text of its own format, which the plugin
+  keeps with the DAW's project and hands back in every welcome; protocol
+  version 3, ticket 38).
 - Every message names the plugin `instance` it belongs to;
   `AudShellMessage.fromJson` reads what `toJson` writes.
 - `AudShellCodec.encode(message)` frames a message: a 4-byte little-endian

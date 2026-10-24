@@ -5,14 +5,11 @@
 ### Added
 
 - Add the VST3 shell and its editor on Windows
+- Add the editor settings to the plugin state
 
-A DLL for x86-64 with the static runtime that exports only the entry points, checked by the build
-Platform seams: semaphores, the UI thread, the bundle per platform, Winsock AF_UNIX
-The location containing-folder: for content and editor next to the bundle
-The editor on Windows: an executable per open view in a job object, its Flutter view a child of the plugin window
-Vendor the Windows sources of the VST3 SDK; build, validator, native tests and REAPER script on Windows
-getState saves the preset the DAW set last
-The REAPER script saves under its path and captures the editor on Windows
+Protocol 3: AudShellSettings from the editor, the settings in AudShellWelcome
+The plugin keeps them per instance, saves them in its state and asks the DAW to save
+Both views accept them and hand them to the editor in the welcome
 
 ### Changed
 

@@ -7,8 +7,9 @@
 import 'package:aud_audio_core/aud_audio_core.dart';
 
 /// The version of the shell protocol that [AudShellHello] and
-/// [AudShellWelcome] carry.
-const int audShellProtocolVersion = 2;
+/// [AudShellWelcome] carry. Version 3 (ticket 38) adds the editor's
+/// settings: [AudShellSettings] and [AudShellWelcome.settings].
+const int audShellProtocolVersion = 3;
 
 // #############################################################################
 /// A message of the shell protocol between a plugin shell and its editor
@@ -34,6 +35,7 @@ sealed class AudShellMessage {
         'preset' => AudShellPreset.fromJson(json),
         'selectPreset' => AudShellSelectPreset.fromJson(json),
         'midi' => AudShellMidi.fromJson(json),
+        'settings' => AudShellSettings.fromJson(json),
         'show' => AudShellShow(instance: _instance(json)),
         'hide' => AudShellHide(instance: _instance(json)),
         'remove' => AudShellRemove(instance: _instance(json)),
@@ -206,6 +208,7 @@ final class AudShellWelcome extends AudShellMessage {
     this.version = audShellProtocolVersion,
     this.presets = const [],
     this.preset = -1,
+    this.settings = '',
   });
 
   /// A message from [toJson].
@@ -226,11 +229,17 @@ final class AudShellWelcome extends AudShellMessage {
             AudShellPresetInfo.fromJson(preset! as Map<String, Object?>),
         ],
         preset: (json['preset'] as num?)?.toInt() ?? -1,
+        settings: json['settings'] as String? ?? '',
       );
 
   /// The presets of the plugin, in the order of its program list (version
   /// 2); empty for a plugin without.
   final List<AudShellPresetInfo> presets;
+
+  /// The settings the editor sent last for the instance ([AudShellSettings],
+  /// version 3), which the plugin keeps with the DAW's project; empty when
+  /// there are none.
+  final String settings;
 
   /// The index of the preset that plays, -1 for none.
   final int preset;
@@ -265,6 +274,7 @@ final class AudShellWelcome extends AudShellMessage {
     'version': version,
     'presets': [for (final preset in presets) preset.toJson()],
     'preset': preset,
+    'settings': settings,
   };
 }
 
@@ -332,6 +342,34 @@ final class AudShellSelectPreset extends AudShellMessage {
     'type': 'selectPreset',
     'instance': instance,
     'index': index,
+  };
+}
+
+// #############################################################################
+/// To the plugin: the editor's [settings] of the instance changed, e.g. the
+/// key or Hold of its play surface (version 3, ticket 38). The plugin keeps
+/// the text as it is, saves it with the DAW's project and hands it to every
+/// editor of the instance in its [AudShellWelcome], so that the settings
+/// outlive the editor; at most [maxLength] bytes in UTF-8.
+final class AudShellSettings extends AudShellMessage {
+  /// Creates the message.
+  const AudShellSettings(this.settings, {super.instance});
+
+  /// A message from [toJson].
+  factory AudShellSettings.fromJson(Map<String, Object?> json) =>
+      AudShellSettings(json['settings']! as String, instance: _instance(json));
+
+  /// The longest settings the plugin keeps; it ignores longer ones.
+  static const int maxLength = 256 * 1024;
+
+  /// The settings, a text of the editor's own format.
+  final String settings;
+
+  @override
+  Map<String, Object?> toJson() => {
+    'type': 'settings',
+    'instance': instance,
+    'settings': settings,
   };
 }
 

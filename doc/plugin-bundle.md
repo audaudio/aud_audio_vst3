@@ -149,9 +149,11 @@ different nodes per MIDI channel connects the graph to an
   sends its control change only when it moves: until then the values the
   preset sets hold, e.g. the start values of a combi's scripts; `default`
   is where the DAW shows it.
-- **State.** JSON with the preset id, the parameter values and the values
-  of the controls that moved, so that a project never holds a path of the
-  machine it was saved on.
+- **State.** JSON with the preset id, the parameter values, the values of
+  the controls that moved and the settings the editor sent last
+  (`AudShellSettings`, ticket 38), so that a project never holds a path of
+  the machine it was saved on; every welcome hands the settings to the
+  editor.
 - **Editor.** One editor process per DAW process and plugin build, one
   Flutter view per instance, started with a socket pair as file descriptor
   3 and showing its frames through IOSurfaces under a Mach name with the

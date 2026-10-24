@@ -97,13 +97,20 @@ bool parseSettings(const std::string& config, const std::string& document,
 
 // #############################################################################
 // The state of an instance as a DAW project keeps it: the preset by id, the
-// plain values of the graph parameters by stable id and the values of the
-// controls by id - never a path of the machine.
+// plain values of the graph parameters by stable id, the values of the
+// controls by id and the settings of the editor as the editor wrote them
+// (ticket 38) - never a path of the machine.
 struct ShellState {
   std::string preset;
   std::vector<std::pair<uint32_t, float>> params;
   std::vector<std::pair<std::string, double>> controls;
+  std::string editor;
 };
+
+// #############################################################################
+// The longest settings of an editor a state keeps, in bytes
+// (AudShellSettings.maxLength).
+constexpr size_t kMaxEditorSettings = 256 * 1024;
 
 // #############################################################################
 // The state as JSON text.

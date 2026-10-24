@@ -327,7 +327,20 @@ tresult PLUGIN_API Plugin::setState(IBStream* state) {
                                             clamped);
     }
   }
+  // The next editor of the instance starts from them (its welcome).
+  editorSettings_ = restored.editor;
   return kResultOk;
+}
+
+bool Plugin::setEditorSettings(std::string settings) {
+  if (settings.size() > kMaxEditorSettings) return false;
+  if (settings == editorSettings_) return true;
+  editorSettings_ = std::move(settings);
+  // The DAW offers to save the project with them.
+  if (FUnknownPtr<IComponentHandler2> handler(getComponentHandler()); handler) {
+    handler->setDirty(true);
+  }
+  return true;
 }
 
 tresult PLUGIN_API Plugin::getState(IBStream* state) {
@@ -346,6 +359,7 @@ tresult PLUGIN_API Plugin::getState(IBStream* state) {
     const float value = controlValues_[i].load();
     if (std::isfinite(value)) saved.controls.emplace_back(settings_.controls[i].id, value);
   }
+  saved.editor = editorSettings_;
   const std::string text = encodeState(saved);
   if (text.size() > kMaxStateLength) return kResultFalse;
   IBStreamer streamer(state, kLittleEndian);

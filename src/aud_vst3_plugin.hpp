@@ -17,8 +17,8 @@
 //   pressure and pitch bend reach the graph's event input at their sample
 //   offsets (aud_vst3_midi.hpp); the DAW's transport drives the graph's
 //   (aud_vst3_transport.hpp).
-// - The state is the preset, the parameter values and the control values as
-//   JSON - no path, no document.
+// - The state is the preset, the parameter values, the control values and
+//   the settings of the editor as JSON - no path, no document.
 
 #ifndef AUD_VST3_PLUGIN_HPP
 #define AUD_VST3_PLUGIN_HPP
@@ -171,6 +171,18 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   std::shared_ptr<EditorState>& editorState() { return editorState_; }
 
   // ...........................................................................
+  // [UI thread] The settings the editor of this instance sent last
+  // (AudShellSettings, ticket 38), which the state keeps with the DAW's
+  // project and every welcome hands to the editor; empty for none.
+  const std::string& editorSettings() const { return editorSettings_; }
+
+  // ...........................................................................
+  // [UI thread] Keeps the editor's `settings` and tells the DAW that its
+  // project changed; false, keeping the old ones, for settings longer than
+  // kMaxEditorSettings.
+  bool setEditorSettings(std::string settings);
+
+  // ...........................................................................
   // [UI thread] Adds `observer`, which learns every change from now on.
   void addObserver(PluginObserver* observer);
 
@@ -287,6 +299,7 @@ class Plugin : public Steinberg::Vst::SingleComponentEffect,
   std::vector<PluginObserver*> observers_;
   std::map<const PluginObserver*, std::set<uint32_t>> openEdits_;
   std::shared_ptr<EditorState> editorState_;
+  std::string editorSettings_;  // UI thread
   // Whether the views and the UI thread's blocks may still touch the
   // plugin; terminate clears it on the UI thread.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
