@@ -3,7 +3,9 @@
 What an app hands `aud_audio_vst3` to build a VST3 plugin of its own (ticket
 37): one configuration, one graph document and its presets. The shell is
 generic; everything that makes the plugin an instrument of the app lives in
-these three files.
+these three files. aud_audio_plugin reads them (plugin-010); its
+`doc/plugin-config.md` describes the keys every shell shares, this file adds
+the VST3's identity, layout and behaviour.
 
 ## Layout
 

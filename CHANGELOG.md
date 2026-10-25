@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Build the VST3 shell on aud_audio_plugin
+
 ## 0.3.0 - 2026-10-24
 
 ### Added
@@ -117,6 +123,7 @@
 
 - Test host: --reframe resizes the view without onSize, --occlude covers its window
 
+
 ## 0.1.0 - 2026-10-11
 
 ### Added
@@ -165,6 +172,7 @@
 - Guard --dest of vendor-vst3sdk.js, check the number options of the REAPER scripts and escape the JSON of the ReaScript
 
 - Document the Dart API, the scripts and the editor; translate the German README
+
 
 ## 0.0.2 - 2026-10-08
 

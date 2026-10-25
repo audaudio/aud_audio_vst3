@@ -37,10 +37,12 @@ class AudShellFd {
 
   // ...........................................................................
   /// Starts reading [fd]; throws an [UnsupportedError] on Windows, which
-  /// hands a process no socket as a file descriptor (ticket 38).
-  static Future<AudShellFd> open(int fd) async {
+  /// hands a process no socket as a file descriptor (ticket 38). [windows]
+  /// stands for [Platform.isWindows], so that the refusal is testable on
+  /// every platform.
+  static Future<AudShellFd> open(int fd, {bool? windows}) async {
     // coverage:ignore-end
-    if (Platform.isWindows) {
+    if (windows ?? Platform.isWindows) {
       throw UnsupportedError(
         'AudShellFd reads an inherited POSIX socket; Windows has none',
       );

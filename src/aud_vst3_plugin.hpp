@@ -38,10 +38,8 @@
 #include "aud_spsc_queue.hpp"
 
 #include "aud_vst3_config.hpp"
-#include "aud_vst3_engine.hpp"
+#include "aud_vst3_shared.hpp"
 #include "aud_vst3_param.hpp"
-#include "aud_vst3_settings.hpp"
-#include "aud_vst3_transport.hpp"
 
 namespace aud_vst3 {
 

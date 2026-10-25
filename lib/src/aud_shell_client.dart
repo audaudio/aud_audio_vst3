@@ -8,9 +8,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'aud_shell_codec.dart';
+import 'package:aud_audio_plugin/aud_audio_plugin.dart';
+
 import 'aud_shell_fd.dart';
-import 'aud_shell_message.dart';
 
 // #############################################################################
 /// The editor's end of the shell protocol: exchanges [AudShellMessage]s

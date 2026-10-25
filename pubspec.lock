@@ -51,6 +51,13 @@ packages:
       url: "git@github.com:audaudio/aud_audio_graph.git"
     source: git
     version: "0.5.5"
+  aud_audio_plugin:
+    dependency: "direct main"
+    description:
+      path: "../aud_audio_plugin"
+      relative: true
+    source: path
+    version: "0.0.1"
   aud_midi_standard:
     dependency: transitive
     description:

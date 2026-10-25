@@ -4,7 +4,7 @@
 // Use of this source code is governed by terms that can be
 // found in the LICENSE file in the root of this package.
 
-// The DAW's MIDI as events of the graph (aud_vst3_midi.hpp).
+// The DAW's controllers as events of the graph (aud_vst3_midi.hpp).
 
 #include "aud_vst3_midi.hpp"
 
@@ -46,32 +46,6 @@ int main() {
     });
   });
 
-  group("notes", [] {
-    test("note on on channel 3 at its offset", [] {
-      const AudEvent event = noteOnEvent(2, 60, 0.5f, 17);
-      expectEqual(event.type, static_cast<uint32_t>(AUD_EVENT_UMP));
-      expectEqual(event.sample_offset, 17u);
-      expectEqual(event.port, 0u);
-      const Midi midi = midiOf(event);
-      expectEqual(midi.status, 0x92u);
-      expectEqual(midi.data1, 60u);
-      expectEqual(midi.data2, 64u);
-      expectEqual(aud_ump_is_note_on(event.words[0], event.words[1]) != 0, true);
-    });
-    test("a note on keeps a velocity of at least 1", [] {
-      expectEqual(midiOf(noteOnEvent(0, 60, 0.0f, 0)).data2, 1u);
-      expectEqual(midiOf(noteOnEvent(0, 60, 1.0f, 0)).data2, 127u);
-    });
-    test("note off and poly pressure", [] {
-      const Midi off = midiOf(noteOffEvent(15, 127, 0.0f, 0));
-      expectEqual(off.status, 0x8Fu);
-      expectEqual(off.data1, 127u);
-      const Midi pressure = midiOf(polyPressureEvent(1, 61, 1.0f, 0));
-      expectEqual(pressure.status, 0xA1u);
-      expectEqual(pressure.data2, 127u);
-    });
-  });
-
   group("controllers", [] {
     test("a control change rounds to 7 bits", [] {
       const Midi cc = midiOf(midiParamEvent(0, 74, 0.5, 3));
@@ -94,22 +68,6 @@ int main() {
       expectEqual(top.data1 | (top.data2 << 7), 16383u);
       const Midi bottom = midiOf(midiParamEvent(0, kMidiPitchBend, 0, 0));
       expectEqual(bottom.data1 | (bottom.data2 << 7), 0u);
-    });
-  });
-  group("raw messages", [] {
-    test("a channel voice message as it is", [] {
-      const Midi cc = midiOf(midiEvent(0xB2, 1, 99, 5));
-      expectEqual(cc.status, 0xB2u);
-      expectEqual(cc.data1, 1u);
-      expectEqual(cc.data2, 99u);
-      expectEqual(midiEvent(0x90, 60, 1, 5).sample_offset, 5u);
-    });
-    test("the data bytes of a status", [] {
-      expectEqual(midiDataBytes(0x93), 2u);
-      expectEqual(midiDataBytes(0xC0), 1u);
-      expectEqual(midiDataBytes(0xD5), 1u);
-      expectEqual(midiDataBytes(0xF8), 0u);
-      expectEqual(midiDataBytes(0x40), 0u);
     });
   });
   return aud_vst3_test::finish();

@@ -38,7 +38,15 @@ const {
   headersHash,
   compileAll,
   cppIn,
+  coreSources,
+  pluginSrc,
 } = require('./build-plugin.js');
+
+// Sources of aud_audio_plugin by file name, for the platform.
+const coreOf = (...names) =>
+  coreSources(windows ? 'windows' : 'macos').filter((file) =>
+    names.some((name) => path.basename(file).startsWith(name)),
+  );
 
 const testDir = path.join(root, 'test', 'native');
 
@@ -47,14 +55,13 @@ const testDir = path.join(root, 'test', 'native');
 const tests = [
   {
     file: 'aud_vst3_bundle_test.cpp',
-    sources: [
-      'src/aud_vst3_bundle.cpp',
-      windows ? 'src/aud_vst3_bundle_win.cpp' : 'src/aud_vst3_bundle_mac.mm',
-    ],
+    sources: ['src/aud_vst3_bundle.cpp'],
+    core: coreOf('aud_plugin_bundle'),
   },
   {
     file: 'aud_vst3_midi_test.cpp',
     sources: ['src/aud_vst3_midi.cpp'],
+    core: coreOf('aud_plugin_midi'),
   },
   {
     file: 'aud_vst3_param_test.cpp',
@@ -62,18 +69,9 @@ const tests = [
     sdk: true,
   },
   {
-    file: 'aud_vst3_settings_test.cpp',
-    sources: ['src/aud_vst3_settings.cpp'],
-    graph: true,
-  },
-  {
     file: 'aud_vst3_socket_test.cpp',
     sources: ['src/aud_vst3_socket.cpp'],
     graphFiles: ['aud_json.cpp'],
-  },
-  {
-    file: 'aud_vst3_transport_test.cpp',
-    sources: ['src/aud_vst3_transport.cpp'],
   },
 ];
 
@@ -97,10 +95,11 @@ async function buildTest(test) {
   const dirs = { graph: packageSrc('aud_audio_graph'), core: packageSrc('aud_audio_core') };
   const flags = [...baseFlags(options, dirs), ...sdkFlags];
   const objDir = path.join(buildDir, 'test');
-  const headers = headersHash([sdkDir, dirs.graph, dirs.core, path.join(root, 'src'), testDir]);
+  const headers = headersHash([sdkDir, dirs.graph, dirs.core, pluginSrc, path.join(root, 'src'), testDir]);
   const files = [
     path.join(testDir, test.file),
     ...test.sources.map((file) => path.join(root, file)),
+    ...(test.core ?? []),
     ...(test.graph ? cppIn(dirs.graph) : []),
     ...(test.graphFiles ?? []).map((file) => path.join(dirs.graph, file)),
   ];

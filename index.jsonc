@@ -8,7 +8,7 @@
   "name": "aud_audio_vst3",
   "summary": "VST3 shell of the Audanika Audio Engine over its headless host.",
   "domain": [
-    "VST3 shell over the headless host (S18): presets, parameters, DAW MIDI and transport, state, symbol hygiene",
+    "VST3 shell over the headless host (S18) on the shared core of aud_audio_plugin: presets as program list, parameters, IMidiMapping, DAW transport, state, symbol hygiene",
     "Flutter editor out of process: shell protocol over an inherited socket, shared IOSurfaces, forwarded input, MIDI to the DAW (plugin-003, plugin-007)",
     "Editor in a DAW: no pause on occlusion, geometry without onSize, surfaces kept in use replaced, notes of an ended editor released",
     "Windows (ticket 38): a DLL with the static runtime, junction and containing-folder locations, the editor as a child window of another process over a Unix domain socket (plugin-008, plugin-009)",
@@ -16,6 +16,7 @@
   ],
   "interfaces": {
     "uses": {
+      "aud_audio_plugin": "package dependency; the engine, settings, state, transport, MIDI events, content lookup, the build of core, graph and node packages, the shell protocol's messages (plugin-010)",
       "aud_audio_graph": "package dependency; the headless host in C",
       "aud_audio_core": "package dependency; AudCommand, the SPSC ring"
     },

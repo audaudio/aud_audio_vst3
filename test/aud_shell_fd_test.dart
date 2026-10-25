@@ -75,6 +75,10 @@ void main() {
   }, testOn: '!windows');
 
   test('AudShellFd.open(fd) refuses on Windows', () {
+    expect(AudShellFd.open(3, windows: true), throwsUnsupportedError);
+  });
+
+  test('AudShellFd.open(fd) refuses on Windows itself', () {
     expect(AudShellFd.open(3), throwsUnsupportedError);
   }, testOn: 'windows');
 }

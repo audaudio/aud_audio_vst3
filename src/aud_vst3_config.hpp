@@ -20,6 +20,8 @@
 #ifndef AUD_VST3_CONFIG_HPP
 #define AUD_VST3_CONFIG_HPP
 
+#include "aud_plugin_config.hpp"
+
 #ifndef AUD_VST3_NAME
 #define AUD_VST3_NAME "Aud Example"
 #endif
@@ -56,12 +58,8 @@
 #endif
 
 // #############################################################################
-// With AUD_VST3_RTSAN the realtime path of the plugin carries Clang's
-// nonblocking effect, so that RealtimeSanitizer checks what it calls.
-#if AUD_VST3_RTSAN && defined(__clang__)
-#define AUD_VST3_NONBLOCKING [[clang::nonblocking]]
-#else
-#define AUD_VST3_NONBLOCKING
-#endif
+// The realtime path of the plugin carries Clang's nonblocking effect in a
+// RealtimeSanitizer build (AUD_PLUGIN_RTSAN), as that of aud_audio_plugin.
+#define AUD_VST3_NONBLOCKING AUD_PLUGIN_NONBLOCKING
 
 #endif  // AUD_VST3_CONFIG_HPP
