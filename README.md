@@ -11,7 +11,10 @@ ticket 38, Windows on x86-64): an
 instrument plugin over the headless host of `aud_audio_graph` that an app
 configures with three files - `plugin.json`, a graph document and its
 presets ([doc/plugin-bundle.md](doc/plugin-bundle.md)) - and builds with
-the node packages it names linked in.
+the node packages it names linked in. The format-agnostic core - the
+engine over the headless host, the configuration, presets, state, MIDI
+events, transport, content lookup and the shell protocol - comes from
+`aud_audio_plugin`; this package keeps the VST3 format and its editor.
 
 - The plugin (`src/`): a single-component instrument that renders the
   app's graph document through `aud_host_render`.

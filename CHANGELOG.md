@@ -5,6 +5,7 @@
 ### Changed
 
 - Build the VST3 shell on aud_audio_plugin
+- Name aud_audio_plugin and the app in README and index
 
 ## 0.3.0 - 2026-10-24
 

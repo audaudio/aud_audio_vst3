@@ -20,6 +20,8 @@
       "aud_audio_graph": "package dependency; the headless host in C",
       "aud_audio_core": "package dependency; AudCommand, the SPSC ring"
     },
-    "usedBy": {}
+    "usedBy": {
+      "audanika_app": "the VST3 plugin of the Mac and Windows app: build-plugin.js, AudShellClient in its editor"
+    }
   }
 }
