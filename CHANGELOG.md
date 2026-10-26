@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-10-26
+
+### Changed
+
+- Build the VST3 shell on aud_audio_plugin
+- Name aud_audio_plugin and the app in README and index
+- Document AudShellFd.open(windows:) and drop a dead define
+- Give the example and the defaults neutral identifiers
+
 ## 0.3.0 - 2026-10-24
 
 ### Added

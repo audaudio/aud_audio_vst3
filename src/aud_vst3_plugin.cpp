@@ -21,7 +21,6 @@
 
 #include "aud_vst3_bundle.hpp"
 #include "aud_vst3_midi.hpp"
-#include "aud_vst3_packages.hpp"
 #include "aud_vst3_ui_thread.hpp"
 
 namespace aud_vst3 {

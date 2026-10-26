@@ -3,7 +3,9 @@
 What an app hands `aud_audio_vst3` to build a VST3 plugin of its own (ticket
 37): one configuration, one graph document and its presets. The shell is
 generic; everything that makes the plugin an instrument of the app lives in
-these three files.
+these three files. aud_audio_plugin reads them (plugin-010); its
+`doc/plugin-config.md` describes the keys every shell shares, this file adds
+the VST3's identity, layout and behaviour.
 
 ## Layout
 
@@ -36,15 +38,15 @@ bundle, without `Info.plist`, `PkgInfo` and `Helpers`:
 {
   "schema": 1,
   // The class as the DAW lists it, and its vendor.
-  "name": "Audanika",
-  "vendor": "Audanika",
-  "url": "https://www.audanika.com",
-  "email": "mailto:info@audanika.com",
+  "name": "Example",
+  "vendor": "Example Vendor",
+  "url": "https://www.example.com",
+  "email": "mailto:info@example.com",
   // The version of the bundle and of the class.
-  "version": "4.5.0",
+  "version": "1.0.0",
   // The bundle id of the .vst3 and the class id (32 hex digits), which
   // never changes once a DAW project uses the plugin.
-  "bundleId": "com.audanika.vst3",
+  "bundleId": "com.example.vst3",
   "classId": "0123456789ABCDEF0123456789ABCDEF",
   "subCategories": "Instrument|Synth",
   // The node packages compiled into the shell and registered with its
@@ -64,7 +66,7 @@ bundle, without `Info.plist`, `PkgInfo` and `Helpers`:
   //   bundle:<path>          inside the plugin's own bundle
   "content": [
     "containing-app:Contents/Resources/content/sfz",
-    "app:com.audanika:Contents/Resources/content/sfz"
+    "app:com.example.app:Contents/Resources/content/sfz"
   ],
   // The voice budget of aud_dsp_sampler for the process; 0 lifts it.
   "voiceBudget": 0,
@@ -83,12 +85,12 @@ bundle, without `Info.plist`, `PkgInfo` and `Helpers`:
   ],
   // The editor app in Contents/Helpers; null for the host's generic view.
   // On Windows the editor's executable as a location like those of
-  // `content`, e.g. "containing-folder:audanika.exe".
-  "editor": "Audanika Editor.app",
+  // `content`, e.g. "containing-folder:example.exe".
+  "editor": "Example Editor.app",
   // The app group the sandboxed editor is signed with: the plugin names
   // the Mach port of the editor's frames with it as prefix, the only names
   // a sandboxed process may look up.
-  "appGroup": "TEAMID.com.audanika",
+  "appGroup": "TEAMID.com.example.app",
   // The editor's size in points when a DAW opens it, and the smallest the
   // DAW may make it.
   "editorSize": { "width": 1024, "height": 640,

@@ -12,20 +12,24 @@
 // - AUD_VST3_NAME, AUD_VST3_VENDOR, AUD_VST3_URL, AUD_VST3_EMAIL: the class
 //   and its vendor as the DAW lists them
 // - AUD_VST3_VERSION: the version of the class
-// - AUD_VST3_BUNDLE_ID: the bundle id, also the subsystem of the log
 // - AUD_VST3_SUBCATEGORIES: e.g. "Instrument|Synth"
 // - AUD_VST3_CID0 to AUD_VST3_CID3: the class id, four 32-bit words that
 //   never change once a DAW project uses the plugin
+//
+// The log's subsystem is the bundle id, as AUD_PLUGIN_LOG_SUBSYSTEM of
+// aud_audio_plugin (scripts/build-plugin.js).
 
 #ifndef AUD_VST3_CONFIG_HPP
 #define AUD_VST3_CONFIG_HPP
+
+#include "aud_plugin_config.hpp"
 
 #ifndef AUD_VST3_NAME
 #define AUD_VST3_NAME "Aud Example"
 #endif
 
 #ifndef AUD_VST3_VENDOR
-#define AUD_VST3_VENDOR "Audanika"
+#define AUD_VST3_VENDOR "audaudio"
 #endif
 
 #ifndef AUD_VST3_URL
@@ -33,15 +37,11 @@
 #endif
 
 #ifndef AUD_VST3_EMAIL
-#define AUD_VST3_EMAIL "mailto:info@audanika.com"
+#define AUD_VST3_EMAIL ""
 #endif
 
 #ifndef AUD_VST3_VERSION
 #define AUD_VST3_VERSION "0.2.0"
-#endif
-
-#ifndef AUD_VST3_BUNDLE_ID
-#define AUD_VST3_BUNDLE_ID "io.audaudio.vst3.example"
 #endif
 
 #ifndef AUD_VST3_SUBCATEGORIES
@@ -56,12 +56,8 @@
 #endif
 
 // #############################################################################
-// With AUD_VST3_RTSAN the realtime path of the plugin carries Clang's
-// nonblocking effect, so that RealtimeSanitizer checks what it calls.
-#if AUD_VST3_RTSAN && defined(__clang__)
-#define AUD_VST3_NONBLOCKING [[clang::nonblocking]]
-#else
-#define AUD_VST3_NONBLOCKING
-#endif
+// The realtime path of the plugin carries Clang's nonblocking effect in a
+// RealtimeSanitizer build (AUD_PLUGIN_RTSAN), as that of aud_audio_plugin.
+#define AUD_VST3_NONBLOCKING AUD_PLUGIN_NONBLOCKING
 
 #endif  // AUD_VST3_CONFIG_HPP

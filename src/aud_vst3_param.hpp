@@ -20,7 +20,7 @@
 // every file of the plugin must see them renamed.
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
 
-#include "aud_vst3_engine.hpp"
+#include "aud_vst3_shared.hpp"
 
 namespace aud_vst3 {
 

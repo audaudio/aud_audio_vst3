@@ -7,10 +7,11 @@
 // Builds the VST3 bundle of an app from its plugin.json (ticket 37,
 // doc/plugin-bundle.md) with clang, without CMake: the vendored SDK subset
 // (src/third_party/vst3sdk/SOURCES.txt), the graph engine, the node
-// packages plugin.json names, and the shell. The packages come from a
-// package config - the app's, so that the plugin plays the versions the app
-// plays -, compiled from their sources and the manifests of their vendored
-// code (build-001) by the recipes below, which mirror their build hooks.
+// packages plugin.json names, the shared core of the shells and the shell.
+// The packages and aud_audio_plugin, whose scripts/plugin-build.js compiles
+// the core, the graph and the packages by its recipes (build-001), come
+// from a package config - the app's, so that the plugin plays the versions
+// the app plays (plugin-010).
 //
 // The bundle exports only the three VST3 entry points and hides all other
 // symbols (plugin-004), so that two plugins over the engine never share code
@@ -40,39 +41,57 @@
 
 'use strict';
 
-const { createHash } = require('node:crypto');
-const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 
-const windows = process.platform === 'win32';
+const root = path.resolve(__dirname, '..');
 
-// On Windows, clang++, lld-link and llvm-readobj come from the LLVM of
-// Visual Studio (component "C++ Clang compiler for Windows"), as in the
-// native tests of the family's packages (ticket 38).
-function useVisualStudioLlvm() {
-  const vswhere = path.join(
-    process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)',
-    'Microsoft Visual Studio',
-    'Installer',
-    'vswhere.exe',
-  );
-  const found = spawnSync(
-    vswhere,
-    ['-latest', '-products', '*', '-find', 'VC/Tools/Llvm/x64/bin/clang++.exe'],
-    { encoding: 'utf8' },
-  );
-  const clang = found.status === 0 ? found.stdout.split(/\r?\n/)[0].trim() : '';
-  if (!clang) throw new Error('Install the C++ Clang compiler of Visual Studio');
-  if (!process.env.PATH.split(path.delimiter).includes(path.dirname(clang))) {
-    process.env.PATH = [path.dirname(clang), process.env.PATH].join(path.delimiter);
-  }
+// The package config the build resolves its packages through: the app's,
+// named by --package-config, or this package's own.
+function packageConfigOf(argv) {
+  const at = argv.indexOf('--package-config');
+  return at >= 0 && at + 1 < argv.length
+    ? path.resolve(argv[at + 1])
+    : path.join(root, '.dart_tool', 'package_config.json');
 }
+
+// The shared build of aud_audio_plugin (scripts/plugin-build.js), from the
+// package config of this run.
+function pluginBuildOf(configPath) {
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`Run dart pub get first: ${configPath} is missing`);
+  }
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const entry = config.packages.find((p) => p.name === 'aud_audio_plugin');
+  if (!entry) throw new Error(`Package aud_audio_plugin is not in ${configPath}`);
+  const pluginRoot = fileURLToPath(new URL(entry.rootUri, pathToFileURL(configPath)));
+  return require(path.join(pluginRoot, 'scripts', 'plugin-build.js'));
+}
+
+const core = pluginBuildOf(
+  packageConfigOf(require.main === module ? process.argv.slice(2) : []),
+);
+const {
+  windows,
+  useVisualStudioLlvm,
+  coreSources,
+  cppIn,
+  readList,
+  recipesOf,
+  packagesSource,
+  packageSrcOf,
+  hashOf,
+  compilerOf,
+  coreFlags,
+  headersHash,
+  compileAll,
+  removePath,
+} = core;
+
 if (windows) useVisualStudioLlvm();
 
-const root = path.resolve(__dirname, '..');
 const sdkDir = path.join(root, 'src', 'third_party', 'vst3sdk');
 const buildDir = path.join(root, '.dart_tool', 'vst3-build');
 const installDir = windows
@@ -89,25 +108,19 @@ const exampleConfig = path.join(root, 'example', 'plugin', 'plugin.json');
 // Windows.
 const shellSources = [
   'src/aud_vst3_bundle.cpp',
-  'src/aud_vst3_engine.cpp',
   'src/aud_vst3_factory.cpp',
   'src/aud_vst3_midi.cpp',
   'src/aud_vst3_param.cpp',
   'src/aud_vst3_plugin.cpp',
-  'src/aud_vst3_settings.cpp',
   'src/aud_vst3_socket.cpp',
-  'src/aud_vst3_sync.cpp',
-  'src/aud_vst3_transport.cpp',
   'src/aud_vst3_ui_thread.cpp',
   ...(windows
-    ? ['src/aud_vst3_bundle_win.cpp', 'src/aud_vst3_editor_win.cpp']
-    : [
-        'src/aud_vst3_bundle_mac.mm',
-        'src/aud_vst3_editor.mm',
-        'src/aud_vst3_objc.mm',
-        'src/aud_vst3_surfaces.mm',
-      ]),
+    ? ['src/aud_vst3_editor_win.cpp']
+    : ['src/aud_vst3_editor.mm', 'src/aud_vst3_objc.mm', 'src/aud_vst3_surfaces.mm']),
 ];
+
+// The platform of the shared core's sources.
+const platform = windows ? 'windows' : 'macos';
 
 // What the bundle links of the system: frameworks on macOS, libraries on
 // Windows.
@@ -130,104 +143,6 @@ const binaryFolder = windows ? 'x86_64-win' : 'MacOS';
 
 // The entry points a bundle exports on Windows (plugin-004).
 const windowsExports = ['ExitDll', 'GetPluginFactory', 'InitDll'];
-
-// ............................................................................
-// The node packages: what their build hooks compile, the function that
-// registers their nodes, and the one that sets the samplers' voice budget.
-
-// Every C++ file directly in `dir`, as the hooks list them.
-function cppIn(dir) {
-  return fs
-    .readdirSync(dir)
-    .filter((file) => file.endsWith('.cpp'))
-    .sort()
-    .map((file) => path.join(dir, file));
-}
-
-function readList(file) {
-  return fs
-    .readFileSync(file, 'utf8')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function listIn(dir, manifest) {
-  return readList(path.join(dir, manifest)).map((entry) => path.join(dir, entry));
-}
-
-const recipes = {
-  aud_dsp_sampler: (src) => {
-    const sfizz = path.join(src, 'third_party', 'sfizz');
-    return {
-      sources: [...cppIn(src), ...listIn(sfizz, 'SOURCES.txt')],
-      includes: [src, ...listIn(sfizz, 'INCLUDES.txt')],
-      defines: [
-        'GHC_FILESYSTEM_FWD',
-        'ENABLE_DSD',
-        'ENABLE_THREADS',
-        'HAVE_FSEEKO',
-        'HAVE___BUILTIN_CLZ',
-        'NOMINMAX',
-        // M_PI and its kin in the C runtime of Windows.
-        ...(windows ? ['_USE_MATH_DEFINES'] : []),
-      ],
-      // As the hook on Windows: sfizz's AVX objects carry no __AVX__ guard,
-      // so all of it is built for AVX; simde needs <cmath> first.
-      flags: windows ? ['-mavx', '-include', 'aud_windows_math.h'] : [],
-      // CommandLineToArgvW of ghc::filesystem.
-      libraries: windows ? ['shell32'] : [],
-      register: 'aud_dsp_sampler_register',
-      voiceBudget: 'aud_dsp_sampler_set_voice_budget',
-      notices: [path.join(src, 'third_party', 'NOTICES.md')],
-    };
-  },
-  aud_dsp_effects: (src) => {
-    const third = path.join(src, 'third_party');
-    return {
-      sources: [
-        ...cppIn(src),
-        path.join(third, 'dunne_audio_kit', 'AdjustableDelayLine.cpp'),
-        path.join(third, 'dunne_audio_kit', 'StereoDelay.cpp'),
-        path.join(third, 'freeverb', 'allpass.cpp'),
-        path.join(third, 'freeverb', 'comb.cpp'),
-        path.join(third, 'freeverb', 'revmodel.cpp'),
-      ],
-      includes: [src, path.join(third, 'freeverb'), path.join(third, 'dunne_audio_kit')],
-      defines: [],
-      flags: ['-ffp-contract=off'],
-      register: 'aud_dsp_effects_register',
-      notices: [path.join(third, 'NOTICES.md')],
-    };
-  },
-  aud_audio_script: (src, packageSrc) => {
-    const quickjs = path.join(packageSrc('gg_quickjs'), 'quickjs-ng');
-    return {
-      sources: [
-        ...cppIn(src),
-        ...['dtoa.c', 'libregexp.c', 'libunicode.c', 'quickjs.c'].map((file) =>
-          path.join(quickjs, file),
-        ),
-      ],
-      includes: [src, quickjs],
-      defines: ['_GNU_SOURCE'],
-      flags: [],
-      // QuickJS-ng as gg_quickjs builds it: unsigned char, no warnings of
-      // third-party code, and on Windows the defines of
-      // QuickjsNgBuild.defines, which the package's C++ files do not take.
-      cFlags: [
-        '-funsigned-char',
-        '-w',
-        ...(windows ? ['-DWIN32_LEAN_AND_MEAN', '-D_WIN32_WINNT=0x0601'] : []),
-      ],
-      register: 'aud_audio_script_register',
-      notices: [
-        path.join(src, 'third_party', 'NOTICES.md'),
-        path.join(quickjs, 'LICENSE'),
-      ],
-    };
-  },
-};
 
 // ............................................................................
 // Arguments, tools
@@ -259,26 +174,7 @@ function parseArgs(argv) {
 }
 
 function run(command, args, cwd = root) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
-  if (result.error) throw new Error(`${command} failed: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new Error(`${path.basename(command)} failed:\n${result.stdout}${result.stderr}`);
-  }
-  return result.stdout;
-}
-
-// The `src` directory of a package, resolved through `configPath`.
-function packageSrcOf(configPath) {
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Run dart pub get first: ${configPath} is missing`);
-  }
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  return (name) => {
-    const entry = config.packages.find((p) => p.name === name);
-    if (!entry) throw new Error(`Package ${name} is not in ${configPath}`);
-    const rootUri = new URL(entry.rootUri, pathToFileURL(configPath));
-    return path.join(fileURLToPath(rootUri), 'src');
-  };
+  return core.run(command, args, cwd);
 }
 
 // Whether a source of the vendored SDK builds on this platform: the
@@ -299,68 +195,21 @@ function sdkSources() {
     .map((file) => path.join(sdkDir, file));
 }
 
-function hashOf(parts) {
-  const hash = createHash('sha256');
-  for (const part of parts) hash.update(part).update('\0');
-  return hash.digest('hex').slice(0, 20);
-}
-
-// The compiler: Apple's clang or that of Visual Studio, or LLVM from
-// Homebrew for RealtimeSanitizer.
-function compilerOf(options) {
-  if (!options.rtsan) return 'clang++';
-  if (windows) throw new Error('RealtimeSanitizer builds run on macOS only');
-  for (const candidate of [
-    process.env.AUD_RTSAN_CXX,
-    '/opt/homebrew/opt/llvm/bin/clang++',
-    '/usr/local/opt/llvm/bin/clang++',
-  ].filter(Boolean)) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  throw new Error('RealtimeSanitizer needs LLVM from Homebrew');
-}
-
-// The flags every object shares: the target, optimization, hidden symbols
-// and the includes of the SDK, the graph, the core and the shell.
+// The flags every object shares: those of aud_audio_plugin for the target
+// (coreFlags), the SDK's, and the includes of the SDK and the shell. The
+// log of the shared core is the plugin's: AUD_VST3_LOG names its file in a
+// test.
 function baseFlags(options, dirs) {
-  const flags = [
-    ...targetFlags,
-    '-O3',
-    '-g',
+  return [
+    ...coreFlags(options, dirs, targetFlags),
     '-DRELEASE=1',
-    '-DNDEBUG=1',
     '-DSMTG_USE_STDATOMIC_H=1',
-    '-fvisibility=hidden',
-    '-fvisibility-inlines-hidden',
+    '-DAUD_PLUGIN_LOG_ENV="AUD_VST3_LOG"',
     '-I',
     sdkDir,
     '-I',
-    dirs.graph,
-    '-I',
-    dirs.core,
-    '-I',
     path.join(root, 'src'),
   ];
-  if (windows) {
-    flags.push(
-      '-DNOMINMAX',
-      '-D_CRT_SECURE_NO_WARNINGS',
-      // The engine compiled into the bundle exports nothing of its own.
-      '-DAUD_EXPORT=',
-    );
-  }
-  if (options.rtsan) {
-    // The graph and the plugin mark their realtime path nonblocking, so the
-    // sanitizer checks everything a block calls (ticket 20, decision 8).
-    flags.push(
-      '-fsanitize=realtime',
-      '-DAUD_GRAPH_RTSAN=1',
-      '-DAUD_VST3_RTSAN=1',
-      '-Wno-function-effects',
-    );
-  }
-  if (options.watchdog) flags.push('-DAUD_GRAPH_WATCHDOG=1');
-  return flags;
 }
 
 // The flags of the SDK and of the shell, which includes its headers: on
@@ -368,73 +217,6 @@ function baseFlags(options, dirs) {
 // and its headers push and pop the packing across includes on purpose. The
 // graph and the packages build without, as their hooks do.
 const sdkFlags = windows ? ['-DUNICODE', '-D_UNICODE', '-Wno-pragma-pack'] : [];
-
-function languageFlags(file) {
-  if (file.endsWith('.mm')) return ['-x', 'objective-c++', '-std=c++17', '-fobjc-arc'];
-  if (file.endsWith('.c')) return ['-x', 'c', '-std=c11'];
-  return ['-x', 'c++', '-std=c++17'];
-}
-
-// One hash over every header the builds may include: a header change
-// rebuilds everything, an unchanged tree compiles nothing.
-function headersHash(dirs) {
-  const files = [];
-  const walk = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (/\.(h|hpp|hh|inc)$/.test(entry.name)) files.push(full);
-    }
-  };
-  for (const dir of dirs) if (fs.existsSync(dir)) walk(dir);
-  return hashOf(files.sort().map((file) => file + fs.statSync(file).mtimeMs + fs.statSync(file).size));
-}
-
-// Compiles `files` with `flags` (plus `cFlags` for C files) into `objDir`.
-async function compileAll(compiler, flags, files, objDir, headers, cFlags = []) {
-  fs.mkdirSync(objDir, { recursive: true });
-  const jobs = files.map((file) => {
-    const key = hashOf([
-      compiler,
-      ...flags,
-      ...cFlags,
-      headers,
-      file,
-      fs.readFileSync(file, 'utf8'),
-    ]);
-    const object = path.join(objDir, `${path.basename(file)}-${key}.o`);
-    return { file, object };
-  });
-  const pending = jobs.filter((job) => !fs.existsSync(job.object));
-  const limit = Math.max(1, os.cpus().length);
-  let next = 0;
-  const failures = [];
-  async function worker() {
-    while (next < pending.length) {
-      const job = pending[next++];
-      const args = [
-        ...flags,
-        ...(job.file.endsWith('.c') ? cFlags : []),
-        ...languageFlags(job.file),
-        '-c',
-        job.file,
-        '-o',
-        `${job.object}.tmp`,
-      ];
-      const code = await new Promise((resolve) => {
-        const child = spawn(compiler, args, { cwd: root, stdio: 'inherit' });
-        child.on('close', resolve);
-      });
-      if (code === 0) fs.renameSync(`${job.object}.tmp`, job.object);
-      else failures.push(job.file);
-    }
-  }
-  await Promise.all(Array.from({ length: limit }, worker));
-  if (failures.length > 0) {
-    throw new Error(`Compilation failed: ${failures.join(', ')}`);
-  }
-  return jobs.map((job) => job.object);
-}
 
 // ............................................................................
 // The bundle
@@ -450,9 +232,6 @@ function readConfig(file) {
     throw new Error(`${file}: classId must be 32 hex digits`);
   }
   config.packages = config.packages ?? [];
-  for (const name of config.packages) {
-    if (!recipes[name]) throw new Error(`${file}: no recipe for package ${name}`);
-  }
   return config;
 }
 
@@ -469,45 +248,10 @@ function identityDefines(config) {
     `-DAUD_VST3_URL=${cString(config.url ?? '')}`,
     `-DAUD_VST3_EMAIL=${cString(config.email ?? '')}`,
     `-DAUD_VST3_VERSION=${cString(config.version)}`,
-    `-DAUD_VST3_BUNDLE_ID=${cString(config.bundleId)}`,
+    `-DAUD_PLUGIN_LOG_SUBSYSTEM=${cString(config.bundleId)}`,
     `-DAUD_VST3_SUBCATEGORIES=${cString(config.subCategories ?? 'Instrument|Synth')}`,
     ...[0, 1, 2, 3].map((i) => `-DAUD_VST3_CID${i}=0x${cid.slice(i * 8, i * 8 + 8)}u`),
   ];
-}
-
-// The registration of the packages, generated per build.
-function packagesSource(config, packageRecipes) {
-  const lines = [
-    '// Generated by scripts/build-plugin.js; do not edit.',
-    '#include "aud_vst3_packages.hpp"',
-    '',
-  ];
-  for (const recipe of packageRecipes) {
-    lines.push(`extern "C" int32_t ${recipe.register}(const AudHostApi* host);`);
-    if (recipe.voiceBudget) {
-      lines.push(`extern "C" void ${recipe.voiceBudget}(int32_t voices);`);
-    }
-  }
-  lines.push(
-    '',
-    'namespace aud_vst3 {',
-    '',
-    'bool registerPackages(AudGraph* graph, std::string* error) {',
-    '  const AudHostApi* api = aud_graph_host_api(graph);',
-  );
-  config.packages.forEach((name, i) => {
-    lines.push(
-      `  if (const int32_t result = ${packageRecipes[i].register}(api); result != AUD_OK) {`,
-      `    if (error != nullptr) *error = "${name} refused: " + std::to_string(result);`,
-      '    return false;',
-      '  }',
-    );
-  });
-  lines.push('  return true;', '}', '', 'void setVoiceBudget(int32_t voices) {');
-  const budget = packageRecipes.find((recipe) => recipe.voiceBudget);
-  lines.push(budget ? `  ${budget.voiceBudget}(voices);` : '  (void)voices;');
-  lines.push('}', '', '}  // namespace aud_vst3', '');
-  return lines.join('\n');
 }
 
 function infoPlist(config, executable) {
@@ -583,16 +327,14 @@ async function build(options) {
   const configDir = path.dirname(options.config);
   const packageSrc = packageSrcOf(options.packageConfig);
   const dirs = { graph: packageSrc('aud_audio_graph'), core: packageSrc('aud_audio_core') };
-  const packageRecipes = config.packages.map((name) => ({
-    name,
-    ...recipes[name](packageSrc(name), packageSrc),
-  }));
+  const packageRecipes = recipesOf(config.packages, packageSrc);
   const compiler = compilerOf(options);
   const flags = baseFlags(options, dirs);
   const headers = headersHash([
     sdkDir,
     dirs.graph,
     dirs.core,
+    core.pluginSrc,
     path.join(root, 'src'),
     ...packageRecipes.flatMap((recipe) => recipe.includes),
   ]);
@@ -625,12 +367,12 @@ async function build(options) {
   }
   const generated = path.join(objDir, `packages-${hashOf([config.packages.join(',')])}.cpp`);
   fs.mkdirSync(objDir, { recursive: true });
-  fs.writeFileSync(generated, packagesSource(config, packageRecipes));
+  fs.writeFileSync(generated, packagesSource(packageRecipes));
   objects.push(
     ...(await compileAll(
       compiler,
       [...flags, ...sdkFlags, ...identityDefines(config)],
-      [...shellSources.map((file) => path.join(root, file)), generated],
+      [...coreSources(platform), ...shellSources.map((file) => path.join(root, file)), generated],
       path.join(objDir, 'shell'),
       headers,
     )),
@@ -718,19 +460,6 @@ async function build(options) {
   return bundle;
 }
 
-// Removes `target`: a link or junction itself, never what it points to, or
-// a tree.
-function removePath(target) {
-  let stat;
-  try {
-    stat = fs.lstatSync(target);
-  } catch {
-    return;
-  }
-  if (stat.isSymbolicLink()) fs.unlinkSync(target);
-  else fs.rmSync(target, { recursive: true, force: true });
-}
-
 // Links the DLL of a bundle on Windows (ticket 38) with lld-link: through a
 // response file, as sfizz's objects pass the limit of a command line, with
 // unused code dropped and the import library kept out of the bundle. Fails
@@ -786,6 +515,8 @@ module.exports = {
   headersHash,
   compileAll,
   cppIn,
+  coreSources,
+  pluginSrc: core.pluginSrc,
   build,
   parseArgs,
   useVisualStudioLlvm,

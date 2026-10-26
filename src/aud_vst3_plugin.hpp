@@ -16,7 +16,7 @@
 // - The DAW's notes and, through IMidiMapping, its control changes, channel
 //   pressure and pitch bend reach the graph's event input at their sample
 //   offsets (aud_vst3_midi.hpp); the DAW's transport drives the graph's
-//   (aud_vst3_transport.hpp).
+//   (aud_plugin_transport.hpp of aud_audio_plugin).
 // - The state is the preset, the parameter values, the control values and
 //   the settings of the editor as JSON - no path, no document.
 
@@ -38,10 +38,8 @@
 #include "aud_spsc_queue.hpp"
 
 #include "aud_vst3_config.hpp"
-#include "aud_vst3_engine.hpp"
+#include "aud_vst3_shared.hpp"
 #include "aud_vst3_param.hpp"
-#include "aud_vst3_settings.hpp"
-#include "aud_vst3_transport.hpp"
 
 namespace aud_vst3 {
 

@@ -11,7 +11,10 @@ ticket 38, Windows on x86-64): an
 instrument plugin over the headless host of `aud_audio_graph` that an app
 configures with three files - `plugin.json`, a graph document and its
 presets ([doc/plugin-bundle.md](doc/plugin-bundle.md)) - and builds with
-the node packages it names linked in.
+the node packages it names linked in. The format-agnostic core - the
+engine over the headless host, the configuration, presets, state, MIDI
+events, transport, content lookup and the shell protocol - comes from
+`aud_audio_plugin`; this package keeps the VST3 format and its editor.
 
 - The plugin (`src/`): a single-component instrument that renders the
   app's graph document through `aud_host_render`.
@@ -91,7 +94,8 @@ the plugin listens on (`AudShellClient.connect`).
 `example/aud_audio_vst3_example.dart` runs both ends in one process.
 On Windows, which hands a process no socket as a file descriptor,
 `AudShellFd.open` and with it `AudShellClient.fromFd` throw an
-`UnsupportedError`; the editor connects with `AudShellClient.connect`.
+`UnsupportedError`; `AudShellFd.open(fd, windows: true)` refuses on every
+platform, for tests. The editor connects with `AudShellClient.connect`.
 
 ```dart
 import 'dart:io';

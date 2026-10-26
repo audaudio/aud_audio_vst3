@@ -6,7 +6,7 @@
 
 // The editor of the plugin on Windows (ticket 38, plugin-009): the
 // executable plugin.json names as `editor` - a location such as
-// `containing-folder:Audanika.exe`, the app that ships the plugin -,
+// `containing-folder:App.exe`, the app that ships the plugin -,
 // started with `--plugin-editor` for every open view of an instance.
 //
 // Windows lets a window of one process be the child of a window of another,

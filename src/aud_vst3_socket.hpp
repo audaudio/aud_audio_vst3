@@ -7,12 +7,13 @@
 // The plugin's end of the shell protocol (ticket 24, decision 3 of the plan
 // review of ticket 23): a Unix domain socket, one connection at a time,
 // frames of a 4-byte little-endian length and UTF-8 JSON - the framing of
-// AudShellCodec in lib/src/aud_shell_codec.dart. The connection is one end
-// of a socket pair whose other end the editor inherits when the plugin
-// starts it (connectPair, ticket 37) - a sandboxed editor reaches no socket
-// file of the DAW -, or a connection accepted on a socket file (start, the
-// spike of ticket 24, and Windows, ticket 38: Winsock has AF_UNIX but no
-// socket pair a process could inherit).
+// AudShellCodec of aud_audio_plugin (lib/src/aud_shell_codec.dart). The
+// connection is one end of a socket pair whose other end the editor
+// inherits when the plugin starts it (connectPair, ticket 37) - a
+// sandboxed editor reaches no socket file of the DAW -, or a connection
+// accepted on a socket file (start, the spike of ticket 24, and Windows,
+// ticket 38: Winsock has AF_UNIX but no socket pair a process could
+// inherit).
 //
 // One IPC thread per server accepts, reads and writes. Every connection
 // has an id; received messages and the end of a connection go to the

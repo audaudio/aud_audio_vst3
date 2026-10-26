@@ -1,6 +1,6 @@
 name: aud_audio_vst3
 description: "VST3 shell of the Audanika Audio Engine over its headless host"
-version: 0.3.0
+version: 0.4.0
 publish_to: none
 homepage: https://github.com/audaudio/aud_audio_vst3
 repository: https://github.com/audaudio/aud_audio_vst3
@@ -10,6 +10,11 @@ environment:
 
 dependencies:
   ffi: ^2.2.0
+  aud_audio_plugin:
+    git:
+      url: git@github.com:audaudio/aud_audio_plugin.git
+      tag_pattern: "{{version}}"
+    version: ^0.1.0
   aud_audio_core:
     git:
       url: git@github.com:audaudio/aud_audio_core.git
