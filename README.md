@@ -94,7 +94,8 @@ the plugin listens on (`AudShellClient.connect`).
 `example/aud_audio_vst3_example.dart` runs both ends in one process.
 On Windows, which hands a process no socket as a file descriptor,
 `AudShellFd.open` and with it `AudShellClient.fromFd` throw an
-`UnsupportedError`; the editor connects with `AudShellClient.connect`.
+`UnsupportedError`; `AudShellFd.open(fd, windows: true)` refuses on every
+platform, for tests. The editor connects with `AudShellClient.connect`.
 
 ```dart
 import 'dart:io';

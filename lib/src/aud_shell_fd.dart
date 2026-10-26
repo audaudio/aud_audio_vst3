@@ -37,9 +37,9 @@ class AudShellFd {
 
   // ...........................................................................
   /// Starts reading [fd]; throws an [UnsupportedError] on Windows, which
-  /// hands a process no socket as a file descriptor (ticket 38). [windows]
-  /// stands for [Platform.isWindows], so that the refusal is testable on
-  /// every platform.
+  /// hands a process no socket as a file descriptor (ticket 38).
+  /// - [windows] stands for [Platform.isWindows], so that tests reach the
+  ///   refusal on every platform
   static Future<AudShellFd> open(int fd, {bool? windows}) async {
     // coverage:ignore-end
     if (windows ?? Platform.isWindows) {

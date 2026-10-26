@@ -248,7 +248,6 @@ function identityDefines(config) {
     `-DAUD_VST3_URL=${cString(config.url ?? '')}`,
     `-DAUD_VST3_EMAIL=${cString(config.email ?? '')}`,
     `-DAUD_VST3_VERSION=${cString(config.version)}`,
-    `-DAUD_VST3_BUNDLE_ID=${cString(config.bundleId)}`,
     `-DAUD_PLUGIN_LOG_SUBSYSTEM=${cString(config.bundleId)}`,
     `-DAUD_VST3_SUBCATEGORIES=${cString(config.subCategories ?? 'Instrument|Synth')}`,
     ...[0, 1, 2, 3].map((i) => `-DAUD_VST3_CID${i}=0x${cid.slice(i * 8, i * 8 + 8)}u`),

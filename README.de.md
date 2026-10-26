@@ -101,8 +101,9 @@ geschrieben von `AudShellFd` über FFI, da `dart:io` kein geerbtes Socket
 (`AudShellClient.connect`). `example/aud_audio_vst3_example.dart` spielt
 beide Enden in einem Prozess durch. Unter Windows, das einem Prozess kein
 Socket als Dateideskriptor übergibt, werfen `AudShellFd.open` und damit
-`AudShellClient.fromFd` einen `UnsupportedError`; der Editor verbindet sich
-dort mit `AudShellClient.connect`.
+`AudShellClient.fromFd` einen `UnsupportedError`;
+`AudShellFd.open(fd, windows: true)` verweigert auf jeder Plattform, für
+Tests. Der Editor verbindet sich dort mit `AudShellClient.connect`.
 
 ```dart
 import 'dart:io';

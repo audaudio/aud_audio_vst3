@@ -6,6 +6,7 @@
 
 - Build the VST3 shell on aud_audio_plugin
 - Name aud_audio_plugin and the app in README and index
+- Document AudShellFd.open(windows:) and drop a dead define
 
 ## 0.3.0 - 2026-10-24
 
