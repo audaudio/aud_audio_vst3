@@ -1,9 +1,8 @@
 {
   "schema": 1,
   "name": "Aud Example",
-  "vendor": "Audanika",
+  "vendor": "audaudio",
   "url": "https://github.com/audaudio/aud_audio_vst3",
-  "email": "mailto:info@audanika.com",
   "version": "0.2.0",
   "bundleId": "io.audaudio.vst3.example",
   "classId": "41554433455841504C45000000000001",

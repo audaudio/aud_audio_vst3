@@ -23,7 +23,7 @@
 // that many seconds while the item plays, and its window is captured as a
 // PNG next to the log.
 //
-//   node scripts/reaper-test.js [--plugin "Audanika"] [--render 0,13,27]
+//   node scripts/reaper-test.js [--plugin "Aud Example"] [--render 0,13,27]
 //     [--presets 28] [--show-editor 10]
 
 'use strict';
@@ -47,7 +47,7 @@ const work = path.join(root, '.dart_tool', 'reaper');
 const audiblePeak = 0.001;
 
 function parseArgs(argv) {
-  const options = { plugin: 'Audanika', render: [0], presets: 1, showEditor: 0 };
+  const options = { plugin: 'Aud Example', render: [0], presets: 1, showEditor: 0 };
   for (let i = 0; i < argv.length; ++i) {
     const arg = argv[i];
     if (arg === '--plugin') options.plugin = argv[++i];

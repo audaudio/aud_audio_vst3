@@ -29,7 +29,7 @@
 #endif
 
 #ifndef AUD_VST3_VENDOR
-#define AUD_VST3_VENDOR "Audanika"
+#define AUD_VST3_VENDOR "audaudio"
 #endif
 
 #ifndef AUD_VST3_URL
@@ -37,7 +37,7 @@
 #endif
 
 #ifndef AUD_VST3_EMAIL
-#define AUD_VST3_EMAIL "mailto:info@audanika.com"
+#define AUD_VST3_EMAIL ""
 #endif
 
 #ifndef AUD_VST3_VERSION
