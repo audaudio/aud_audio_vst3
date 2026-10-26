@@ -54,10 +54,12 @@ packages:
   aud_audio_plugin:
     dependency: "direct main"
     description:
-      path: "../aud_audio_plugin"
-      relative: true
-    source: path
-    version: "0.0.1"
+      path: "."
+      resolved-ref: "7e47fadee09b02ac0ad46d1b45823d7554101772"
+      tag-pattern: "{{version}}"
+      url: "git@github.com:audaudio/aud_audio_plugin.git"
+    source: git
+    version: "0.1.0"
   aud_midi_standard:
     dependency: transitive
     description:

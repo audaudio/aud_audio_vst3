@@ -14,7 +14,7 @@ dependencies:
     git:
       url: git@github.com:audaudio/aud_audio_plugin.git
       tag_pattern: "{{version}}"
-    version: ^0.0.1
+    version: ^0.1.0
   aud_audio_core:
     git:
       url: git@github.com:audaudio/aud_audio_core.git
