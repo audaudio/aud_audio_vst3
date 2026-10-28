@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0 - 2026-10-28
+
+### Changed
+
+- Require Dart 3.13 and upgrade the dependencies
+
+- Require Dart 3.13
+
+- Upgrade dna_audanika to ^0.1.0
+
+- Upgrade helix to ^1.14.0
+
+- Set the identity the DNA layers ask for in dna/_vars.json
+
+- Reformat 1 file with the Dart 3.13 formatter
+
+- Add the blog post of this change, in English and German
+
+- Bring the README to the README template, in English and German
+
+- Upgrade the dependencies published since the first pass
+
+- Lift the lock file to the newest resolvable versions
+
 ## 0.4.0 - 2026-10-26
 
 ### Changed

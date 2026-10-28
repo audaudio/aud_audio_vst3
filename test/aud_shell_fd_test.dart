@@ -5,6 +5,7 @@
 // found in the LICENSE file in the root of this package.
 
 import 'dart:async';
+
 import 'package:aud_audio_vst3/aud_audio_vst3.dart';
 import 'package:test/test.dart';
 
