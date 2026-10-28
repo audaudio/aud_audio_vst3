@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Require Dart 3.13 and upgrade the dependencies
+
+- Require Dart 3.13
+- Upgrade dna_audanika to ^0.1.0
+- Upgrade helix to ^1.14.0
+- Set the identity the DNA layers ask for in dna/_vars.json
+- Reformat 1 file with the Dart 3.13 formatter
+- Add the blog post of this change, in English and German
+- Bring the README to the README template, in English and German
+
 ## 0.4.0 - 2026-10-26
 
 ### Changed
@@ -126,6 +140,7 @@
 
 - Test host: --reframe resizes the view without onSize, --occlude covers its window
 
+
 ## 0.1.0 - 2026-10-11
 
 ### Added
@@ -174,6 +189,7 @@
 - Guard --dest of vendor-vst3sdk.js, check the number options of the REAPER scripts and escape the JSON of the ReaScript
 
 - Document the Dart API, the scripts and the editor; translate the German README
+
 
 ## 0.0.2 - 2026-10-08
 
