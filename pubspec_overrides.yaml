@@ -10,3 +10,5 @@ dependency_overrides:
     path: ../aud_midi_standard
   aud_audio_graph:
     path: ../aud_audio_graph
+  aud_audio_plugin:
+    path: ../aud_audio_plugin
