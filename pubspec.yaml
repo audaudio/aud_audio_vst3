@@ -14,17 +14,17 @@ dependencies:
     git:
       url: git@github.com:audaudio/aud_audio_plugin.git
       tag_pattern: "{{version}}"
-    version: ^0.1.0
+    version: ^0.1.1
   aud_audio_core:
     git:
       url: git@github.com:audaudio/aud_audio_core.git
       tag_pattern: "{{version}}"
-    version: ^0.5.4
+    version: ^0.6.0
   aud_audio_graph:
     git:
       url: git@github.com:audaudio/aud_audio_graph.git
       tag_pattern: "{{version}}"
-    version: ^0.5.5
+    version: ^0.6.0
 dev_dependencies:
   dna_audanika: ^0.1.0
   flutter_lints: ^6.0.0
