@@ -4,7 +4,7 @@
   "vendor": "audaudio",
   "url": "https://github.com/audaudio/aud_audio_vst3",
   "version": "0.2.0",
-  "bundleId": "io.audaudio.vst3.example",
+  "bundleId": "com.example.audAudioVst3Example",
   "classId": "41554433455841504C45000000000001",
   "subCategories": "Instrument|Synth",
   "packages": [],
