@@ -5,6 +5,7 @@
 ### Changed
 
 - Require Flutter 3.50 and Dart 3.14, build the DNA
+- Keep the index to repos of this organization
 
 ## 0.5.1 - 2026-10-29
 
